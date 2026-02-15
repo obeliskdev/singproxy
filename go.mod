@@ -3,8 +3,8 @@ module github.com/obeliskdev/singproxy
 go 1.25.0
 
 require (
-	github.com/sagernet/sing v0.7.16
-	github.com/sagernet/sing-box v1.12.18
+	github.com/sagernet/sing v0.7.18
+	github.com/sagernet/sing-box v1.12.22
 )
 
 require (
