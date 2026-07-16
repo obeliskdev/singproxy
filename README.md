@@ -23,7 +23,7 @@ go get github.com/obeliskdev/singproxy
 If your build requires optional sing-box capabilities, include relevant build tags, for example:
 
 ```bash
--tags=with_utls,with_gvisor,with_quic,with_dhcp,with_acme,with_clash_api,with_wireguard
+go build -tags "with_utls with_gvisor with_quic with_dhcp with_acme with_clash_api with_wireguard" ./...
 ```
 
 ## Proxy Interface
@@ -34,7 +34,8 @@ Every parsed proxy implements:
 type Proxy interface {
 	String() string
 	Addr() net.IP
-	DialContext(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error)
+	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
+	DialContextAddr(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error)
 }
 ```
 
@@ -62,7 +63,7 @@ func main() {
 	}
 
 	target := &net.TCPAddr{IP: net.ParseIP("1.1.1.1"), Port: 443}
-	conn, err := proxy.DialContext(context.Background(), "tcp", target)
+	conn, err := proxy.DialContextAddr(context.Background(), "tcp", target)
 	if err != nil {
 		panic(err)
 	}
@@ -97,16 +98,21 @@ for _, e := range errs {
 - `vmess://`
 - `trojan://`, `trojan-go://`
 - `ss://`
+- `ssr://`, `shadowsocksr://`
 - `hysteria://`, `hysteria2://`
 - `tuic://`
 - `ssh://`
-- `socks4://`, `socks5://`
+- `socks://`, `socks5://`, `socks4://`, `socks4a://`
 - `http://`, `https://`, `http2://`
 - `wireguard://`
 - `shadowtls://`
 - `anytls://`, `atls://`
-- `naive://`, `naive+https://`
 - `tor://`
+
+> **Note:** `ssr://` and `shadowsocksr://` links are parsed, but sing-box 1.6+
+> no longer supports creating ShadowsocksR outbounds at runtime; the parsed
+> options will be rejected by sing-box's outbound factory with a
+> "deprecated" error.
 
 ## HTTP Client Integration Example
 
@@ -121,7 +127,7 @@ client := &http.Client{
 			if err != nil {
 				return nil, err
 			}
-			return proxy.DialContext(ctx, network, tcpAddr)
+			return proxy.DialContextAddr(ctx, network, tcpAddr)
 		},
 	},
 }
@@ -130,8 +136,15 @@ client := &http.Client{
 ## Testing
 
 ```bash
+# Fast: unit tests only (no build tags required)
 go test ./...
+
+# Full: includes sing-box integration tests
+go test -tags "with_utls with_gvisor with_quic with_dhcp with_acme with_clash_api with_wireguard" -race ./...
 ```
+
+To run the real-world proxy-list integration test, set `SINGPROXY_TEST_LIST` to a
+file containing one proxy URL per line. The test is skipped otherwise.
 
 ## License
 

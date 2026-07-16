@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/url"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +36,6 @@ type SingBoxProxy struct {
 }
 
 var globalBox *singBoxContext
-var nonBase64Chars = regexp.MustCompile("[^a-zA-Z0-9+/=_-]")
 
 type singBoxContext struct {
 	ctx              context.Context
@@ -222,28 +220,29 @@ type connResult struct {
 	err  error
 }
 
-func (p *SingBoxProxy) DialContext(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error) {
+func (p *SingBoxProxy) DialContext(ctx context.Context, network string, addr string) (net.Conn, error) {
+	if addr == "" {
+		return nil, ErrMissingTarget
+	}
+	return p.dialSocksaddr(ctx, network, metadata.ParseSocksaddr(addr))
+}
+
+func (p *SingBoxProxy) DialContextAddr(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error) {
 	if addr == nil {
 		return nil, ErrMissingTarget
 	}
+	return p.dialSocksaddr(ctx, network, metadata.SocksaddrFromNet(addr))
+}
 
+func (p *SingBoxProxy) dialSocksaddr(ctx context.Context, network string, targetAddr metadata.Socksaddr) (net.Conn, error) {
 	if network != "tcp" && network != "udp" {
 		return nil, &net.OpError{Op: "dial", Net: network, Err: net.UnknownNetworkError(network)}
 	}
 
-	targetAddr := metadata.SocksaddrFromNet(addr)
 	resC := make(chan connResult, 1)
-
 	go func() {
 		conn, err := p.outbound.DialContext(context.Background(), network, targetAddr)
-
-		select {
-		case resC <- connResult{conn, err}:
-		case <-ctx.Done():
-			if conn != nil {
-				_ = conn.Close()
-			}
-		}
+		resC <- connResult{conn, err}
 	}()
 
 	timer := time.NewTimer(p.timeout)
@@ -251,13 +250,19 @@ func (p *SingBoxProxy) DialContext(ctx context.Context, network string, addr *ne
 
 	select {
 	case <-ctx.Done():
+		go discardResult(resC)
 		return nil, ctx.Err()
-
 	case <-timer.C:
+		go discardResult(resC)
 		return nil, ErrProxyDialTimeoutReached
-
 	case res := <-resC:
 		return res.conn, res.err
+	}
+}
+
+func discardResult(resC <-chan connResult) {
+	if res := <-resC; res.conn != nil {
+		_ = res.conn.Close()
 	}
 }
 

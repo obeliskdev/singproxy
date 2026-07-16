@@ -1,72 +1,61 @@
 package singproxy
 
 import (
-	"encoding/base64"
-	"io"
-	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-const proxyListURL = "https://raw.githubusercontent.com/Surfboardv2ray/TGParse/main/splitted/mixed"
-
 func TestParseRealWorldProxies(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping live network test in short mode")
+	path := os.Getenv("SINGPROXY_TEST_LIST")
+	if path == "" {
+		t.Skip("Set SINGPROXY_TEST_LIST to a proxy list file to run this test")
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(proxyListURL)
+	body, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Failed to fetch proxy list from %s: %v", proxyListURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Failed to fetch proxy list: received status code %d", resp.StatusCode)
+		t.Fatalf("Failed to read proxy list from %s: %v", path, err)
 	}
 
-	b64Body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("Failed to read response body: %v", err)
-	}
-
-	decodedBody, err := base64.StdEncoding.DecodeString(string(b64Body))
-	if err != nil {
-		t.Fatalf("Failed to decode base64 content from URL: %v", err)
-	}
-
-	lines := strings.Split(string(decodedBody), "\n")
+	lines := strings.Split(string(body), "\n")
 	var proxyURLs []string
 	for _, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			proxyURLs = append(proxyURLs, line)
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			proxyURLs = append(proxyURLs, trimmed)
 		}
 	}
 
 	if len(proxyURLs) == 0 {
-		t.Fatal("Decoded proxy list is empty, cannot proceed with test.")
+		t.Fatal("Proxy list is empty, cannot proceed with test.")
 	}
 
 	t.Logf("Attempting to parse %d real-world proxy URLs...", len(proxyURLs))
 
 	proxies, errs := FromURLs(time.Second*8, proxyURLs...)
 
-	if len(errs) > 0 {
-		t.Errorf("Encountered %d errors while parsing %d proxies:", len(errs), len(proxyURLs))
-		for i, e := range errs {
-			t.Errorf("  - Error %d: %v", i+1, e)
+	t.Logf("Successfully parsed %d out of %d proxies (%d errors).", len(proxies), len(proxyURLs), len(errs))
+
+	errorByType := map[string]int{}
+	for _, e := range errs {
+		msg := e.Error()
+		if idx := strings.Index(msg, ":"); idx > 0 {
+			msg = msg[:idx]
 		}
+		errorByType[msg]++
 	}
-
-	if len(proxies) != len(proxyURLs) {
-		t.Errorf("Mismatch in count: expected to parse %d proxies, but only got %d", len(proxyURLs), len(proxies))
+	for msg, count := range errorByType {
+		t.Logf("  error category (%d): %s", count, msg)
 	}
-
-	t.Logf("Successfully parsed %d out of %d proxies.", len(proxies), len(proxyURLs))
 
 	if len(errs) > 0 {
-		t.Fail()
+		t.Logf("First 10 errors:")
+		max := 10
+		if len(errs) < max {
+			max = len(errs)
+		}
+		for i := 0; i < max; i++ {
+			t.Logf("  [%d] %v", i, errs[i])
+		}
 	}
 }

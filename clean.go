@@ -3,8 +3,11 @@ package singproxy
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 )
+
+var nonBase64Chars = regexp.MustCompile("[^a-zA-Z0-9+/=_-]")
 
 func cleanBruteForce(cleanedURL string) string {
 	schemeEnd := strings.Index(cleanedURL, "://")

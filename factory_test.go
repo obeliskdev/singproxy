@@ -3,6 +3,7 @@ package singproxy
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -62,8 +63,107 @@ func TestFromURL(t *testing.T) {
 			},
 		},
 		{
+			name: "VLESS+WS+TLS with mux",
+			url:  "vless://ws-uuid@ws.example.com:443?encryption=none&security=tls&sni=ws.example.com&type=ws&path=/ray&host=ws.example.com&alpn=h2&fp=chrome&mux=8&allow_insecure=1#vless-ws",
+			validate: func(t *testing.T, p Proxy) {
+				opts := p.(*SingBoxProxy).options.(*option.VLESSOutboundOptions)
+				if opts.Server != "ws.example.com" || opts.ServerPort != 443 || opts.UUID != "ws-uuid" {
+					t.Errorf("VLESS WS server/uuid mismatch. Got %+v", opts)
+				}
+				if opts.Transport == nil || opts.Transport.Type != "ws" {
+					t.Fatalf("VLESS WS transport should be ws")
+				}
+				if opts.Transport.WebsocketOptions.Path != "/ray" {
+					t.Errorf("VLESS WS path mismatch. Got %s", opts.Transport.WebsocketOptions.Path)
+				}
+				if opts.TLS == nil || !opts.TLS.Enabled || opts.TLS.ServerName != "ws.example.com" {
+					t.Errorf("VLESS WS TLS mismatch. Got %+v", opts.TLS)
+				}
+				if !opts.TLS.Insecure {
+					t.Errorf("VLESS WS allow_insecure=1 should set Insecure=true")
+				}
+				if len(opts.TLS.ALPN) != 1 || opts.TLS.ALPN[0] != "h2" {
+					t.Errorf("VLESS WS ALPN mismatch. Got %v", opts.TLS.ALPN)
+				}
+				if opts.Multiplex == nil || !opts.Multiplex.Enabled {
+					t.Fatalf("VLESS WS multiplex should be enabled")
+				}
+				if opts.Multiplex.MaxStreams != 8 {
+					t.Errorf("VLESS WS mux max_streams should be 8. Got %d", opts.Multiplex.MaxStreams)
+				}
+			},
+		},
+		{
+			name: "VLESS+HTTP transport",
+			url:  "vless://http-uuid@http.example.com:443?encryption=none&security=tls&sni=http.example.com&type=http&path=/http&host=http.example.com#vless-http",
+			validate: func(t *testing.T, p Proxy) {
+				opts := p.(*SingBoxProxy).options.(*option.VLESSOutboundOptions)
+				if opts.Transport == nil || opts.Transport.Type != "http" {
+					t.Fatalf("VLESS HTTP transport should be http")
+				}
+				if opts.Transport.HTTPOptions.Path != "/http" {
+					t.Errorf("VLESS HTTP path mismatch. Got %s", opts.Transport.HTTPOptions.Path)
+				}
+			},
+		},
+		{
+			name:      "VLESS unsupported encryption",
+			url:       "vless://uuid@bad.example.com:443?encryption=aes-128-gcm",
+			shouldErr: true,
+		},
+		{
 			name:      "Invalid Scheme",
 			url:       "invalid-scheme://whatever",
+			shouldErr: true,
+		},
+		{
+			name: "Trojan-Go aliases",
+			url:  "trojan-go://pass@trojango.example.com:443?ssl_verify=false&ssl_sni=trojango.example.com&type=ws&path=/ws",
+			validate: func(t *testing.T, p Proxy) {
+				opts := p.(*SingBoxProxy).options.(*option.TrojanOutboundOptions)
+				if opts.Server != "trojango.example.com" || opts.ServerPort != 443 || opts.Password != "pass" {
+					t.Errorf("Trojan-Go server/password mismatch. Got %+v", opts)
+				}
+				if opts.TLS == nil || !opts.TLS.Enabled {
+					t.Fatalf("Trojan-Go TLS not enabled")
+				}
+				if !opts.TLS.Insecure {
+					t.Errorf("Trojan-Go ssl_verify=false should map to insecure=true")
+				}
+				if opts.TLS.ServerName != "trojango.example.com" {
+					t.Errorf("Trojan-Go ssl_sni should map to sni. Got ServerName=%s", opts.TLS.ServerName)
+				}
+				if opts.Transport == nil || opts.Transport.Type != "ws" {
+					t.Errorf("Trojan-Go transport should be ws. Got %+v", opts.Transport)
+				}
+			},
+		},
+		{
+			name: "SOCKS4a",
+			url:  "socks4a://host.example.com:1080",
+			validate: func(t *testing.T, p Proxy) {
+				opts := p.(*SingBoxProxy).options.(*option.SOCKSOutboundOptions)
+				if opts.Server != "host.example.com" || opts.ServerPort != 1080 || opts.Version != "4" {
+					t.Errorf("SOCKS4a parsing failed. Got %+v", opts)
+				}
+			},
+		},
+		{
+			name: "SOCKS legacy base64",
+			url:  "socks://" + base64.RawStdEncoding.EncodeToString([]byte("user:pass@socksb64.example.com:1080")),
+			validate: func(t *testing.T, p Proxy) {
+				opts := p.(*SingBoxProxy).options.(*option.SOCKSOutboundOptions)
+				if opts.Server != "socksb64.example.com" || opts.ServerPort != 1080 || opts.Version != "5" {
+					t.Errorf("SOCKS legacy base64 parsing failed. Got %+v", opts)
+				}
+				if opts.Username != "user" || opts.Password != "pass" {
+					t.Errorf("SOCKS legacy base64 auth mismatch. Got user=%s pass=%s", opts.Username, opts.Password)
+				}
+			},
+		},
+		{
+			name:      "ShadowsocksR",
+			url:       "ssr://" + base64.StdEncoding.EncodeToString([]byte("ssr.example.com:8388:auth_aes128_md5:aes-256-cfb:http_simple:"+base64.StdEncoding.EncodeToString([]byte("ssrpass")))),
 			shouldErr: true,
 		},
 	}
@@ -108,7 +208,7 @@ func TestDirectConnection(t *testing.T) {
 					return nil, err
 				}
 
-				return proxy.DialContext(ctx, network, tcpAddr)
+				return proxy.DialContextAddr(ctx, network, tcpAddr)
 			},
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
