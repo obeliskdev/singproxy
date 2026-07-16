@@ -26,7 +26,7 @@ func TestCategorizeErrors(t *testing.T) {
 		}
 	}
 
-	_, errs := FromURLs(time.Second*8, proxyURLs...)
+	_, errs := FromURLs(Config{DialTimeout: 8 * time.Second}, proxyURLs...)
 
 	categories := map[string]int{}
 	examples := map[string]string{}

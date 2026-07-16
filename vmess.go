@@ -2,7 +2,6 @@ package singproxy
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -36,24 +35,7 @@ type vmessLinkData struct {
 }
 
 func (d *vmessLinkData) StringField(field any) string {
-	if field == nil {
-		return ""
-	}
-	switch v := field.(type) {
-	case string:
-		return v
-	case json.Number:
-		return v.String()
-	case float64:
-		return fmt.Sprintf("%v", v)
-	case bool:
-		if v {
-			return "true"
-		}
-		return "false"
-	default:
-		return fmt.Sprintf("%v", v)
-	}
+	return anyToString(field)
 }
 
 func (d *vmessLinkData) NetStr() string           { return d.StringField(d.Net) }
@@ -67,19 +49,9 @@ func (d *vmessLinkData) FPStr() string            { return d.StringField(d.FP) }
 func (d *vmessLinkData) AllowInsecureStr() string { return d.StringField(d.AllowInsecure) }
 
 func parseVMess(out *option.VMessOutboundOptions, u *url.URL) error {
-	var payload string
-	if u.Opaque != "" {
-		payload = u.Opaque
-	} else if u.Host != "" {
-		payload = u.Host
-		if u.Path != "" {
-			payload = payload + u.Path
-		}
-		if u.ForceQuery || u.RawQuery != "" {
-			payload = payload + "?" + u.RawQuery
-		}
-	} else {
-		return errors.New("unrecognized vmess URL format")
+	payload, err := extractVMessPayload(u)
+	if err != nil {
+		return err
 	}
 	return parseVMessBase64(out, payload)
 }

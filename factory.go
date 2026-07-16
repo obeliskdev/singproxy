@@ -32,7 +32,7 @@ type SingBoxProxy struct {
 	original string
 	proxyIP  net.IP
 	typed    string
-	timeout  time.Duration
+	cfg      Config
 }
 
 var globalBox *singBoxContext
@@ -104,12 +104,17 @@ func init() {
 	}
 }
 
-func FromURL(timeout time.Duration, proxyURL string) (Proxy, error) {
+func FromURL(cfg Config, proxyURL string) (Proxy, error) {
+	cfg = cfg.withDefaults()
+
 	if proxyURL == "" {
 		return nil, fmt.Errorf("%w: proxy string is empty", ErrInvalidProxyFormat)
 	}
 	if proxyURL == "direct" {
-		return Direct, nil
+		if cfg.DirectTimeout == 0 || cfg.DirectTimeout == defaultDirectTimeout {
+			return Direct, nil
+		}
+		return newDirectProxy(cfg), nil
 	}
 
 	cleanedURL := cleanProxyURL(proxyURL)
@@ -131,18 +136,23 @@ func FromURL(timeout time.Duration, proxyURL string) (Proxy, error) {
 		return nil, err
 	}
 
-	return newSingBoxProxy(proxyURL, u, proxyType, timeout)
+	if isXHTTPTransport(u) {
+		return newXHTTPProxy(proxyURL, u, proxyType, cfg)
+	}
+
+	return newSingBoxProxy(proxyURL, u, proxyType, cfg)
 }
 
 func newSingBoxProxy(
 	originalURL string,
 	parsedURL *url.URL,
 	typed string,
-	timeout time.Duration,
+	cfg Config,
 ) (*SingBoxProxy, error) {
 	p := &SingBoxProxy{
 		original: originalURL,
 		typed:    typed,
+		cfg:      cfg,
 	}
 
 	options, loaded := globalBox.outboundRegistry.CreateOptions(p.typed)
@@ -150,7 +160,7 @@ func newSingBoxProxy(
 		return nil, fmt.Errorf("unknown proxy type: %s", p.typed)
 	}
 
-	if err := parseProxyURL(options, parsedURL, typed, timeout); err != nil {
+	if err := parseProxyURL(options, parsedURL, typed, cfg.DialTimeout); err != nil {
 		return nil, fmt.Errorf("parsing %s failed: %w", originalURL, err)
 	}
 
@@ -160,13 +170,12 @@ func newSingBoxProxy(
 	}
 
 	p.options = options
-	p.timeout = timeout
 	p.outbound = createOutbound
 	p.resolveAndStoreAddr()
 	return p, nil
 }
 
-func FromURLs(timeout time.Duration, urls ...string) ([]Proxy, []error) {
+func FromURLs(cfg Config, urls ...string) ([]Proxy, []error) {
 	var (
 		proxies = make([]Proxy, 0, len(urls))
 		errors  = make([]error, 0)
@@ -182,7 +191,7 @@ func FromURLs(timeout time.Duration, urls ...string) ([]Proxy, []error) {
 		wg.Add(1)
 		go func(index int, urlStr string) {
 			defer wg.Done()
-			proxy, err := FromURL(timeout, urlStr)
+			proxy, err := FromURL(cfg, urlStr)
 			if err != nil {
 				err = fmt.Errorf("url #%d (%s): %w", index, urlStr, err)
 			}
@@ -245,7 +254,7 @@ func (p *SingBoxProxy) dialSocksaddr(ctx context.Context, network string, target
 		resC <- connResult{conn, err}
 	}()
 
-	timer := time.NewTimer(p.timeout)
+	timer := time.NewTimer(p.cfg.DialTimeout)
 	defer timer.Stop()
 
 	select {
@@ -267,30 +276,22 @@ func discardResult(resC <-chan connResult) {
 }
 
 func (p *SingBoxProxy) resolveAndStoreAddr() {
-	var host string
 	v := reflect.ValueOf(p.options)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
-
 	if v.Kind() != reflect.Struct {
 		return
 	}
 
-	serverField := v.FieldByName("Server")
-	if serverField.IsValid() && serverField.Kind() == reflect.String {
-		host = serverField.String()
-	} else {
-		serverOptionsField := v.FieldByName("ServerOptions")
-		if serverOptionsField.IsValid() {
-			if serverOptionsField.Kind() == reflect.Ptr {
-				serverOptionsField = serverOptionsField.Elem()
+	host := v.FieldByName("Server").String()
+	if host == "" {
+		if so := v.FieldByName("ServerOptions"); so.IsValid() {
+			if so.Kind() == reflect.Ptr {
+				so = so.Elem()
 			}
-			if serverOptionsField.Kind() == reflect.Struct {
-				hostField := serverOptionsField.FieldByName("Server")
-				if hostField.IsValid() && hostField.Kind() == reflect.String {
-					host = hostField.String()
-				}
+			if so.Kind() == reflect.Struct {
+				host = so.FieldByName("Server").String()
 			}
 		}
 	}

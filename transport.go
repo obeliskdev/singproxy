@@ -22,7 +22,7 @@ func parseTransport(params url.Values, host string) (*option.V2RayTransportOptio
 	}
 
 	if transportType == "xhttp" || transportType == "splithttp" {
-		return nil, fmt.Errorf("transport type '%s' is Xray-core only and not supported by sing-box", transportType)
+		return nil, nil
 	}
 
 	if transportType == "" || transportType == "tcp" || transportType == "raw" {

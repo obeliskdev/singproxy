@@ -28,6 +28,35 @@ func parseAuth(auth string) (string, string) {
 	return unescapedAuth, ""
 }
 
+func extractUserPass(user *url.Userinfo) (method, password string) {
+	method = user.Username()
+	if p, ok := user.Password(); ok {
+		password = p
+	} else {
+		password = method
+		method = ""
+	}
+	return
+}
+
+func anyToString(field any) string {
+	if field == nil {
+		return ""
+	}
+	switch v := field.(type) {
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 func parsePort(p any) (uint16, error) {
 	var portStr string
 	switch v := p.(type) {

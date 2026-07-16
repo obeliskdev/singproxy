@@ -25,7 +25,7 @@ func TestParsePort(t *testing.T) {
 		{"int64", int64(80), 80, false},
 		{"uint16", uint16(443), 443, false},
 		{"float64 whole", float64(8080), 8080, false},
-		{"float64 fractional", float64(8080.5), 0, true},
+		{"float64 fractional", 8080.5, 0, true},
 		{"nil", nil, 0, true},
 		{"json.Number", json.Number("9090"), 9090, false},
 	}

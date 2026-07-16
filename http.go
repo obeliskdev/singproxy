@@ -27,14 +27,15 @@ func parseHTTP(out *option.HTTPOutboundOptions, u *url.URL) error {
 	}
 	params := u.Query()
 	parseTLS(params, &out.OutboundTLSOptionsContainer, host)
-	if strings.EqualFold(u.Scheme, "https") && out.TLS == nil {
-		out.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: host}
-	}
-	if strings.EqualFold(u.Scheme, "http2") {
+
+	if strings.EqualFold(u.Scheme, "https") || strings.EqualFold(u.Scheme, "http2") {
 		if out.TLS == nil {
 			out.TLS = &option.OutboundTLSOptions{Enabled: true, ServerName: host}
 		}
-		out.TLS.ALPN = append(out.TLS.ALPN, "h2")
+		if strings.EqualFold(u.Scheme, "http2") {
+			out.TLS.ALPN = append(out.TLS.ALPN, "h2")
+		}
 	}
+
 	return nil
 }

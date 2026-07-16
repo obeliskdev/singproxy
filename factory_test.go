@@ -170,7 +170,7 @@ func TestFromURL(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proxy, err := FromURL(time.Second*8, tc.url)
+			proxy, err := FromURL(Config{DialTimeout: 8 * time.Second}, tc.url)
 			if tc.shouldErr {
 				if err == nil {
 					t.Errorf("Expected an error, but got none")
@@ -195,7 +195,7 @@ func TestDirectConnection(t *testing.T) {
 		t.Skip("Skipping live network test in short mode")
 	}
 
-	proxy, err := FromURL(time.Second*8, "direct")
+	proxy, err := FromURL(Config{DialTimeout: 8 * time.Second}, "direct")
 	if err != nil {
 		t.Fatalf("Failed to create direct proxy: %v", err)
 	}

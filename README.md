@@ -39,6 +39,20 @@ type Proxy interface {
 }
 ```
 
+## Configuration
+
+All entry points accept a `Config` struct to control timeout behavior:
+
+```go
+type Config struct {
+	DialTimeout      time.Duration // proxy dial timeout (default 30s)
+	DirectTimeout    time.Duration // direct connection timeout (default 5s)
+	XHTTPDialTimeout time.Duration // XHTTP TCP dial timeout (default 30s)
+}
+```
+
+Use `singproxy.DefaultConfig()` for sane defaults, or `singproxy.Config{}` for zero-value defaults.
+
 ## Quick Start
 
 ```go
@@ -55,7 +69,7 @@ import (
 
 func main() {
 	proxy, err := singproxy.FromURL(
-		8*time.Second,
+		singproxy.Config{DialTimeout: 8 * time.Second},
 		"vless://uuid@example.com:443?security=tls&sni=example.com#edge",
 	)
 	if err != nil {
@@ -83,7 +97,7 @@ urls := []string{
 	"not-a-valid-url",
 }
 
-proxies, errs := singproxy.FromURLs(8*time.Second, urls...)
+proxies, errs := singproxy.FromURLs(singproxy.Config{DialTimeout: 8 * time.Second}, urls...)
 
 fmt.Println("valid proxies:", len(proxies))
 for _, e := range errs {
@@ -115,14 +129,17 @@ for _, e := range errs {
 > "deprecated" error.
 
 > **Note:** The `xhttp` and `splithttp` transport types (Xray-core's XHTTP:
-> Beyond REALITY) are not supported. These are Xray-core-only transports and
-> sing-box has no compatible implementation. Links using `type=xhttp` or
-> `type=splithttp` will return a parse error.
+> Beyond REALITY) are fully supported via a built-in implementation ported
+> from mihomo's `transport/xhttp/`. This supports all three modes (stream-one,
+> stream-up, packet-up) with header padding, XMUX, gRPC header camouflage,
+> H2/HTTP1.1/H3 (QUIC) transport, REALITY TLS, and downloadSettings
+> (upstream/downstream separation). XHTTP works with VLESS, VMess, and Trojan
+> protocols. Browser dialer is not supported (it requires a real browser).
 
 ## HTTP Client Integration Example
 
 ```go
-proxy, _ := singproxy.FromURL(8*time.Second, "direct")
+proxy, _ := singproxy.FromURL(singproxy.Config{}, "direct")
 
 client := &http.Client{
 	Timeout: 12 * time.Second,

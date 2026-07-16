@@ -32,7 +32,7 @@ func TestParseRealWorldProxies(t *testing.T) {
 
 	t.Logf("Attempting to parse %d real-world proxy URLs...", len(proxyURLs))
 
-	proxies, errs := FromURLs(time.Second*8, proxyURLs...)
+	proxies, errs := FromURLs(Config{DialTimeout: 8 * time.Second}, proxyURLs...)
 
 	t.Logf("Successfully parsed %d out of %d proxies (%d errors).", len(proxies), len(proxyURLs), len(errs))
 

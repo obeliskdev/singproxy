@@ -90,16 +90,16 @@ func TestParseTransport(t *testing.T) {
 			wantHost: "up.example.com",
 		},
 		{
-			name:    "xhttp unsupported (Xray-core only)",
+			name:    "xhttp returns nil (handled at factory level)",
 			params:  url.Values{"type": {"xhttp"}, "path": {"/xh"}},
 			host:    "x.example.com",
-			wantErr: true,
+			wantNil: true,
 		},
 		{
-			name:    "splithttp unsupported (Xray-core only)",
+			name:    "splithttp returns nil (handled at factory level)",
 			params:  url.Values{"type": {"splithttp"}, "path": {"/sh"}},
 			host:    "s.example.com",
-			wantErr: true,
+			wantNil: true,
 		},
 		{
 			name:     "tcp with headerType http maps to httpupgrade",

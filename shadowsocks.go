@@ -18,8 +18,8 @@ func parseShadowsocks(out *option.ShadowsocksOutboundOptions, u *url.URL) error 
 			return fmt.Errorf("invalid ss base64 content: %w", decodeErr)
 		}
 		decodedStr := string(decoded)
-		if strings.HasPrefix(decodedStr, "{") {
-			return parseShadowsocksJSON(out, decodedStr)
+		if ret, handled := tryParseSSJSON(out, decodedStr); handled {
+			return ret
 		}
 		newURL := "ss://" + decodedStr
 		var err error
@@ -30,8 +30,8 @@ func parseShadowsocks(out *option.ShadowsocksOutboundOptions, u *url.URL) error 
 	} else if u.User == nil && u.Host != "" && !strings.Contains(u.Host, ":") {
 		if decoded, err := base64Decode(u.Host); err == nil {
 			decodedStr := string(decoded)
-			if strings.HasPrefix(decodedStr, "{") {
-				return parseShadowsocksJSON(out, decodedStr)
+			if ret, handled := tryParseSSJSON(out, decodedStr); handled {
+				return ret
 			}
 			if strings.Contains(decodedStr, "@") {
 				newURL := "ss://" + decodedStr
@@ -82,22 +82,10 @@ func parseShadowsocks(out *option.ShadowsocksOutboundOptions, u *url.URL) error 
 					password = strings.Split(password, ":")[0]
 				}
 			} else {
-				method = u.User.Username()
-				if p, ok := u.User.Password(); ok {
-					password = p
-				} else {
-					password = method
-					method = ""
-				}
+				method, password = extractUserPass(u.User)
 			}
 		} else {
-			method = u.User.Username()
-			if p, ok := u.User.Password(); ok {
-				password = p
-			} else {
-				password = method
-				method = ""
-			}
+			method, password = extractUserPass(u.User)
 		}
 	}
 
@@ -127,6 +115,13 @@ func parseShadowsocks(out *option.ShadowsocksOutboundOptions, u *url.URL) error 
 	return nil
 }
 
+func tryParseSSJSON(out *option.ShadowsocksOutboundOptions, decodedStr string) (error, bool) {
+	if !strings.HasPrefix(decodedStr, "{") {
+		return nil, false
+	}
+	return parseShadowsocksJSON(out, decodedStr), true
+}
+
 type ssJSONConfig struct {
 	Add           string `json:"add"`
 	Port          any    `json:"port"`
@@ -144,18 +139,6 @@ type ssJSONConfig struct {
 	Password      string `json:"password"`
 	Method        string `json:"method"`
 	Encryption    string `json:"encryption"`
-}
-
-func (c *ssJSONConfig) str(field any) string {
-	if field == nil {
-		return ""
-	}
-	switch v := field.(type) {
-	case string:
-		return v
-	default:
-		return fmt.Sprintf("%v", v)
-	}
 }
 
 func parseShadowsocksJSON(out *option.ShadowsocksOutboundOptions, jsonStr string) error {
@@ -194,16 +177,16 @@ func parseShadowsocksJSON(out *option.ShadowsocksOutboundOptions, jsonStr string
 	if netType := strings.ToLower(cfg.Net); netType != "" && netType != "tcp" && netType != "raw" {
 		params := url.Values{}
 		params.Set("type", netType)
-		params.Set("host", cfg.str(cfg.Host))
-		params.Set("path", cfg.str(cfg.Path))
-		params.Set("sni", cfg.str(cfg.SNI))
-		params.Set("alpn", cfg.str(cfg.ALPN))
-		params.Set("fp", cfg.str(cfg.FP))
-		if cfg.str(cfg.TLS) == "tls" {
+		params.Set("host", anyToString(cfg.Host))
+		params.Set("path", anyToString(cfg.Path))
+		params.Set("sni", anyToString(cfg.SNI))
+		params.Set("alpn", anyToString(cfg.ALPN))
+		params.Set("fp", anyToString(cfg.FP))
+		if anyToString(cfg.TLS) == "tls" {
 			params.Set("security", "tls")
 		}
-		if cfg.str(cfg.Insecure) == "1" || cfg.str(cfg.Insecure) == "true" ||
-			cfg.str(cfg.AllowInsecure) == "1" || cfg.str(cfg.AllowInsecure) == "true" {
+		if anyToString(cfg.Insecure) == "1" || anyToString(cfg.Insecure) == "true" ||
+			anyToString(cfg.AllowInsecure) == "1" || anyToString(cfg.AllowInsecure) == "true" {
 			params.Set("insecure", "1")
 		}
 		if _, err := parseTransport(params, cfg.Add); err != nil {

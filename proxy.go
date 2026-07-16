@@ -6,10 +6,6 @@ import (
 	"time"
 )
 
-var proxyOptions = &net.Dialer{
-	Timeout: 5 * time.Second,
-}
-
 type Proxy interface {
 	String() string
 	Addr() net.IP
@@ -17,7 +13,13 @@ type Proxy interface {
 	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
 }
 
-type directProxy struct{}
+type directProxy struct {
+	timeout time.Duration
+}
+
+func newDirectProxy(cfg Config) *directProxy {
+	return &directProxy{timeout: cfg.withDefaults().DirectTimeout}
+}
 
 func (d directProxy) String() string {
 	return "direct"
@@ -27,20 +29,19 @@ func (d directProxy) Addr() net.IP {
 	return net.IPv4zero
 }
 
-func (d directProxy) DialContext(ctx context.Context, network string, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   proxyOptions.Timeout,
-		KeepAlive: proxyOptions.Timeout,
+func (d directProxy) dialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout:   d.timeout,
+		KeepAlive: d.timeout,
 	}
-	return dialer.DialContext(ctx, network, addr)
+}
+
+func (d directProxy) DialContext(ctx context.Context, network string, addr string) (net.Conn, error) {
+	return d.dialer().DialContext(ctx, network, addr)
 }
 
 func (d directProxy) DialContextAddr(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error) {
-	dialer := &net.Dialer{
-		Timeout:   proxyOptions.Timeout,
-		KeepAlive: proxyOptions.Timeout,
-	}
-	return dialer.DialContext(ctx, network, addr.String())
+	return d.dialer().DialContext(ctx, network, addr.String())
 }
 
-var Direct Proxy = &directProxy{}
+var Direct Proxy = newDirectProxy(DefaultConfig())
