@@ -114,6 +114,11 @@ for _, e := range errs {
 > options will be rejected by sing-box's outbound factory with a
 > "deprecated" error.
 
+> **Note:** The `xhttp` and `splithttp` transport types (Xray-core's XHTTP:
+> Beyond REALITY) are not supported. These are Xray-core-only transports and
+> sing-box has no compatible implementation. Links using `type=xhttp` or
+> `type=splithttp` will return a parse error.
+
 ## HTTP Client Integration Example
 
 ```go
