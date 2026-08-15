@@ -181,7 +181,7 @@ func (c *xhttpConfig) applyXPaddingToRequest(reqHeaders http.Header, reqURL *url
 	}
 }
 
-func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *url.URL, sessionID string) error {
+func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *url.URL, sessionID string, hasBody bool) error {
 	c.applyMasqueradedHeaders(reqHeaders, "fetch")
 
 	xPaddingBytes, err := c.GetNormalizedXPaddingBytes()
@@ -191,7 +191,7 @@ func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *u
 	c.applyXPaddingToRequest(reqHeaders, reqURL, c.buildXPaddingConfig(reqURL.String(), xPaddingBytes.Rand()))
 	c.applyMetaToRequest(reqHeaders, reqURL, sessionID, "")
 
-	if !c.NoGRPCHeader {
+	if hasBody && !c.NoGRPCHeader {
 		reqHeaders.Set("Content-Type", "application/grpc")
 	}
 
@@ -199,7 +199,7 @@ func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *u
 }
 
 func (c *xhttpConfig) fillDownloadRequestHeaders(reqHeaders http.Header, reqURL *url.URL, sessionID string) error {
-	return c.fillStreamRequestHeaders(reqHeaders, reqURL, sessionID)
+	return c.fillStreamRequestHeaders(reqHeaders, reqURL, sessionID, false)
 }
 
 func (c *xhttpConfig) fillPacketRequestHeaders(reqHeaders http.Header, reqURL *url.URL, sessionId string, seqStr string, data []byte) error {

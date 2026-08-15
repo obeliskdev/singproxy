@@ -299,7 +299,7 @@ func (c *xhttpClient) dialStreamOne(ctx context.Context) (net.Conn, error) {
 			return
 		}
 		req.Host = c.cfg.Host
-		if err = c.cfg.fillStreamRequestHeaders(req.Header, req.URL, ""); err != nil {
+		if err = c.cfg.fillStreamRequestHeaders(req.Header, req.URL, "", true); err != nil {
 			cleanupStreamOne(pr, pw, transport, reqCancel)
 			return
 		}
@@ -361,7 +361,7 @@ func (c *xhttpClient) dialStreamUp(ctx context.Context) (net.Conn, error) {
 		cleanupStreamUp(uploadTransport, downloadTransport, reqCancel)
 		return nil, err
 	}
-	if err = c.cfg.fillStreamRequestHeaders(uploadReq.Header, uploadReq.URL, sessionID); err != nil {
+	if err = c.cfg.fillStreamRequestHeaders(uploadReq.Header, uploadReq.URL, sessionID, true); err != nil {
 		cleanupStreamUp(uploadTransport, downloadTransport, reqCancel)
 		return nil, err
 	}
@@ -430,9 +430,13 @@ func (c *xhttpClient) dialPacketUp(ctx context.Context) (net.Conn, error) {
 	wrc, gotConn := c.awaitDownload(reqCtx, downloadTransport, dlCfg, sessionID, "packet-up")
 
 	if !<-gotConn {
+		err := wrc.Err()
 		xhttpCloseTransport(uploadTransport)
 		xhttpCloseTransport(downloadTransport)
 		reqCancel()
+		if err != nil {
+			return nil, fmt.Errorf("xhttp packet-up: failed to connect: %w", err)
+		}
 		return nil, fmt.Errorf("xhttp packet-up: failed to connect")
 	}
 
@@ -474,6 +478,21 @@ func newXhttpTransport(tlsCfg *xhttpTLSConfig, alpn []string, keepAlivePeriod ti
 			DialTLSContext:    dialTLS(false),
 			IdleConnTimeout:   xhttpConnIdleTimeout,
 			ForceAttemptHTTP2: false,
+		}, nil
+	}
+
+	if tlsCfg != nil && tlsCfg.forceH2C {
+		// uTLS connections are not *tls.Conn, and net/http has no way to
+		// detect the ALPN-negotiated HTTP/2 for custom TLS dialers. Speak
+		// HTTP/2 framing directly over the already-encrypted connection
+		// (h2c-style), as mihomo does with its net/http fork.
+		protocols := new(http.Protocols)
+		protocols.SetUnencryptedHTTP2(true)
+		protocols.SetHTTP1(false)
+		return &http.Transport{
+			DialTLSContext:  dialTLS(true),
+			IdleConnTimeout: xhttpConnIdleTimeout,
+			Protocols:       protocols,
 		}, nil
 	}
 

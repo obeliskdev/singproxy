@@ -95,6 +95,11 @@ func (w *xhttpWaitReadCloser) Read(b []byte) (int, error) {
 	return w.rc.Read(b)
 }
 
+func (w *xhttpWaitReadCloser) Err() error {
+	<-w.wait
+	return w.err
+}
+
 func (w *xhttpWaitReadCloser) Close() error {
 	w.setup(nil, net.ErrClosed)
 	<-w.wait

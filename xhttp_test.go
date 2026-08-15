@@ -823,7 +823,7 @@ func TestXHTTPFillStreamRequestHeaders(t *testing.T) {
 	h := http.Header{}
 	u, _ := url.Parse("https://example.com/path")
 	c := &xhttpConfig{}
-	err := c.fillStreamRequestHeaders(h, u, "session123")
+	err := c.fillStreamRequestHeaders(h, u, "session123", true)
 	if err != nil {
 		t.Fatalf("fillStreamRequestHeaders: %v", err)
 	}
@@ -842,12 +842,108 @@ func TestXHTTPFillStreamRequestHeadersNoGRPC(t *testing.T) {
 	h := http.Header{}
 	u, _ := url.Parse("https://example.com/path")
 	c := &xhttpConfig{NoGRPCHeader: true}
-	err := c.fillStreamRequestHeaders(h, u, "")
+	err := c.fillStreamRequestHeaders(h, u, "", true)
 	if err != nil {
 		t.Fatalf("fillStreamRequestHeaders: %v", err)
 	}
 	if h.Get("Content-Type") != "" {
 		t.Errorf("Content-Type = %q, want empty", h.Get("Content-Type"))
+	}
+}
+
+func TestXHTTPFillStreamRequestHeadersNoBody(t *testing.T) {
+	h := http.Header{}
+	u, _ := url.Parse("https://example.com/path")
+	c := &xhttpConfig{}
+	err := c.fillStreamRequestHeaders(h, u, "session123", false)
+	if err != nil {
+		t.Fatalf("fillStreamRequestHeaders: %v", err)
+	}
+	if h.Get("Content-Type") != "" {
+		t.Errorf("Content-Type = %q, want empty for bodyless request", h.Get("Content-Type"))
+	}
+	if !strings.Contains(u.Path, "session123") {
+		t.Errorf("path should contain session ID: %s", u.Path)
+	}
+}
+
+func TestXHTTPTransportSelection(t *testing.T) {
+	dialRaw := func(ctx context.Context) (net.Conn, error) {
+		return nil, errors.New("not used")
+	}
+
+	cfgNoFP := &xhttpTLSConfig{forceH2C: false, alpn: []string{"h2", "http/1.1"}}
+	tr, err := newXhttpTransport(cfgNoFP, cfgNoFP.alpn, 0, dialRaw)
+	if err != nil {
+		t.Fatalf("newXhttpTransport (h2): %v", err)
+	}
+	htr, ok := tr.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", tr)
+	}
+	if htr.Protocols != nil {
+		t.Errorf("h2 transport should not force unencrypted HTTP/2, got %v", htr.Protocols)
+	}
+
+	cfgFP := &xhttpTLSConfig{forceH2C: true, alpn: []string{"h2", "http/1.1"}}
+	tr2, err := newXhttpTransport(cfgFP, cfgFP.alpn, 0, dialRaw)
+	if err != nil {
+		t.Fatalf("newXhttpTransport (h2c): %v", err)
+	}
+	htr2, ok := tr2.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", tr2)
+	}
+	if htr2.Protocols == nil || !htr2.Protocols.UnencryptedHTTP2() || htr2.Protocols.HTTP1() {
+		t.Errorf("h2c transport should force unencrypted HTTP/2 without HTTP/1, got %v", htr2.Protocols)
+	}
+
+	cfgH1 := &xhttpTLSConfig{forceH2C: true, alpn: []string{"http/1.1"}}
+	tr3, err := newXhttpTransport(cfgH1, cfgH1.alpn, 0, dialRaw)
+	if err != nil {
+		t.Fatalf("newXhttpTransport (h1.1): %v", err)
+	}
+	htr3, ok := tr3.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", tr3)
+	}
+	if htr3.ForceAttemptHTTP2 {
+		t.Error("http/1.1 transport should not attempt HTTP/2")
+	}
+}
+
+func TestXHTTPTLSConfigForceH2C(t *testing.T) {
+	ctx := context.Background()
+	params := tlsParams{
+		serverAddress: "example.com:443",
+		sni:           "example.com",
+		enabled:       true,
+		alpn:          []string{"h2", "http/1.1"},
+	}
+	cfg, err := newXHTTPTLSConfig(ctx, params)
+	if err != nil {
+		t.Fatalf("tls config: %v", err)
+	}
+	if cfg.forceH2C {
+		t.Error("no fingerprint should not force h2c")
+	}
+	params.fingerprint = "firefox"
+	cfg, err = newXHTTPTLSConfig(ctx, params)
+	if err != nil {
+		t.Fatalf("tls config (fp): %v", err)
+	}
+	if !cfg.forceH2C {
+		t.Error("fingerprint should force h2c (uTLS conns are not *tls.Conn)")
+	}
+	params.fingerprint = ""
+	params.reality = true
+	params.publicKey = "zpbDgfQxvlM2vbx3M1yM4fNC525q_g8yHiTPikDqjhs"
+	cfg, err = newXHTTPTLSConfig(ctx, params)
+	if err != nil {
+		t.Fatalf("tls config (reality): %v", err)
+	}
+	if !cfg.forceH2C {
+		t.Error("reality should force h2c (uTLS conns are not *tls.Conn)")
 	}
 }
 
