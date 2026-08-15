@@ -3,11 +3,26 @@ package singproxy
 import (
 	"context"
 	"net"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/sagernet/sing-box/option"
 )
+
+var _ option.ServerOptionsWrapper = (*option.VLESSOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.VMessOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.TrojanOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.ShadowsocksOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.ShadowsocksROutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.TUICOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.HysteriaOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.Hysteria2OutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.SSHOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.SOCKSOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.HTTPOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.ShadowTLSOutboundOptions)(nil)
+var _ option.ServerOptionsWrapper = (*option.AnyTLSOutboundOptions)(nil)
 
 func TestFromURL_Empty(t *testing.T) {
 	_, err := FromURL(Config{DialTimeout: 8 * time.Second}, "")
@@ -160,4 +175,88 @@ func TestFromURLs_Empty(t *testing.T) {
 	if len(proxies) != 0 || len(errs) != 0 {
 		t.Errorf("expected empty results, got %d proxies, %d errors", len(proxies), len(errs))
 	}
+}
+
+func TestResolveHostIP(t *testing.T) {
+	cases := []struct {
+		host string
+		want net.IP
+	}{
+		{"1.2.3.4", net.ParseIP("1.2.3.4")},
+		{"2001:db8::1", net.ParseIP("2001:db8::1")},
+		{"", nil},
+	}
+	for _, tc := range cases {
+		if got := resolveHostIP(tc.host); !got.Equal(tc.want) {
+			t.Errorf("resolveHostIP(%q): got %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
+func TestFromURL_AddrResolvedFromIP(t *testing.T) {
+	p, err := FromURL(Config{DialTimeout: 8 * time.Second}, "vless://uuid@1.2.3.4:443?encryption=none")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := p.Addr(); !got.Equal(net.ParseIP("1.2.3.4")) {
+		t.Errorf("Addr(): got %v, want 1.2.3.4", got)
+	}
+}
+
+func TestFromURL_WireGuard_AddrResolved(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	wgPrivateKey := "gCrpA4g8MvjGn85nslmf8Uv25soA9j+R5f6vOa3a41E="
+	wgPublicKey := "w9q0T7aiJ27v39yO85yD5jY3kQ1Oa2u5b8a/cDef3gY="
+	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@1.1.1.1:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
+	p, err := FromURL(Config{DialTimeout: 8 * time.Second}, u)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := p.Addr(); !got.Equal(net.ParseIP("1.1.1.1")) {
+		t.Errorf("Addr(): got %v, want 1.1.1.1", got)
+	}
+}
+
+func TestWireGuardDomainPeerDoesNotPanic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live DNS test in short mode")
+	}
+	wgPrivateKey := "gCrpA4g8MvjGn85nslmf8Uv25soA9j+R5f6vOa3a41E="
+	wgPublicKey := "w9q0T7aiJ27v39yO85yD5jY3kQ1Oa2u5b8a/cDef3gY="
+	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@example.com:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
+	p, err := FromURL(Config{DialTimeout: 5 * time.Second}, u)
+	if err != nil {
+		t.Fatalf("FromURL failed: %v", err)
+	}
+	conn, err := p.DialContext(context.Background(), "tcp", "1.1.1.1:443")
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatal("expected a dial error (no real wireguard server), got success")
+	}
+	t.Logf("dial result: %v", err)
+}
+
+func TestWireGuardDomainTargetDoesNotPanic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live DNS test in short mode")
+	}
+	wgPrivateKey := "gCrpA4g8MvjGn85nslmf8Uv25soA9j+R5f6vOa3a41E="
+	wgPublicKey := "w9q0T7aiJ27v39yO85yD5jY3kQ1Oa2u5b8a/cDef3gY="
+	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@1.1.1.1:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
+	p, err := FromURL(Config{DialTimeout: 5 * time.Second}, u)
+	if err != nil {
+		t.Fatalf("FromURL failed: %v", err)
+	}
+	conn, err := p.DialContext(context.Background(), "tcp", "example.com:443")
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatal("expected a dial error (no real wireguard server), got success")
+	}
+	t.Logf("dial result: %v", err)
 }
