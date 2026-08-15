@@ -19,7 +19,6 @@ type vmessLinkData struct {
 	ID              string `json:"id"`
 	Aid             any    `json:"aid"`
 	Net             any    `json:"net"`
-	Type            any    `json:"type"`
 	Host            any    `json:"host"`
 	Path            any    `json:"path"`
 	TLS             any    `json:"tls"`
@@ -33,20 +32,6 @@ type vmessLinkData struct {
 	AuthLength      bool   `json:"authenticated_length"`
 	ServiceNameGRPC string `json:"serviceName"`
 }
-
-func (d *vmessLinkData) StringField(field any) string {
-	return anyToString(field)
-}
-
-func (d *vmessLinkData) NetStr() string           { return d.StringField(d.Net) }
-func (d *vmessLinkData) TypeStr() string          { return d.StringField(d.Type) }
-func (d *vmessLinkData) HostStr() string          { return d.StringField(d.Host) }
-func (d *vmessLinkData) PathStr() string          { return d.StringField(d.Path) }
-func (d *vmessLinkData) TLSStr() string           { return d.StringField(d.TLS) }
-func (d *vmessLinkData) SNIStr() string           { return d.StringField(d.SNI) }
-func (d *vmessLinkData) ALPNStr() string          { return d.StringField(d.ALPN) }
-func (d *vmessLinkData) FPStr() string            { return d.StringField(d.FP) }
-func (d *vmessLinkData) AllowInsecureStr() string { return d.StringField(d.AllowInsecure) }
 
 func parseVMess(out *option.VMessOutboundOptions, u *url.URL) error {
 	payload, err := extractVMessPayload(u)
@@ -81,29 +66,31 @@ func parseVMessBase64(out *option.VMessOutboundOptions, b64 string) error {
 	out.AuthenticatedLength = data.AuthLength
 	out.Network = option.NetworkList(strings.Join([]string{N.NetworkTCP, N.NetworkUDP}, "\n"))
 	out.PacketEncoding = data.PacketEncoding
-	if networkType := strings.ToLower(data.NetStr()); networkType != "tcp" && networkType != "" && networkType != "raw" {
+	if networkType := strings.ToLower(anyToString(data.Net)); networkType != "tcp" && networkType != "" && networkType != "raw" {
+		host := anyToString(data.Host)
+		path := anyToString(data.Path)
 		transport := &option.V2RayTransportOptions{Type: networkType}
 		switch transport.Type {
 		case "ws", "websocket":
 			transport.Type = "ws"
-			transport.WebsocketOptions.Path = data.PathStr()
-			if host := data.HostStr(); host != "" {
+			transport.WebsocketOptions.Path = path
+			if host != "" {
 				transport.WebsocketOptions.Headers = badoption.HTTPHeader{"Host": {host}}
 			}
 		case "grpc":
 			transport.GRPCOptions.ServiceName = data.ServiceNameGRPC
 			if transport.GRPCOptions.ServiceName == "" {
-				transport.GRPCOptions.ServiceName = data.PathStr()
+				transport.GRPCOptions.ServiceName = path
 			}
 		case "httpupgrade":
-			transport.HTTPUpgradeOptions.Host = data.HostStr()
-			transport.HTTPUpgradeOptions.Path = data.PathStr()
-			if host := data.HostStr(); host != "" {
+			transport.HTTPUpgradeOptions.Host = host
+			transport.HTTPUpgradeOptions.Path = path
+			if host != "" {
 				transport.HTTPUpgradeOptions.Headers = badoption.HTTPHeader{"Host": {host}}
 			}
 		case "http":
-			transport.HTTPOptions.Path = data.PathStr()
-			if host := data.HostStr(); host != "" {
+			transport.HTTPOptions.Path = path
+			if host != "" {
 				transport.HTTPOptions.Host = badoption.Listable[string]{host}
 				transport.HTTPOptions.Headers = badoption.HTTPHeader{"Host": {host}}
 			}
@@ -112,20 +99,21 @@ func parseVMessBase64(out *option.VMessOutboundOptions, b64 string) error {
 		}
 		out.Transport = transport
 	}
-	tlsType := strings.ToLower(data.TLSStr())
+	tlsType := strings.ToLower(anyToString(data.TLS))
 	if tlsType == "" && strings.ToLower(data.Security) == "tls" {
 		tlsType = "tls"
 	}
 	if tlsType == "tls" {
+		sni := anyToString(data.SNI)
 		out.TLS = new(option.OutboundTLSOptions)
 		params := url.Values{}
-		params.Set("sni", data.SNIStr())
-		if host := data.HostStr(); host != "" && data.SNIStr() == "" {
+		params.Set("sni", sni)
+		if host := anyToString(data.Host); host != "" && sni == "" {
 			params.Set("sni", host)
 		}
-		params.Set("allowInsecure", data.AllowInsecureStr())
-		params.Set("alpn", data.ALPNStr())
-		params.Set("fp", data.FPStr())
+		params.Set("allowInsecure", anyToString(data.AllowInsecure))
+		params.Set("alpn", anyToString(data.ALPN))
+		params.Set("fp", anyToString(data.FP))
 		params.Set("security", "tls")
 		parseTLS(params, &out.OutboundTLSOptionsContainer, data.Add)
 	}

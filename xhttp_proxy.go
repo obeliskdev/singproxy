@@ -199,15 +199,15 @@ func newXHTTPProxyVMess(originalURL string, u *url.URL, cfg Config) (*xproxyProx
 	}
 
 	params := url.Values{}
-	params.Set("host", data.HostStr())
-	params.Set("path", data.PathStr())
+	params.Set("host", anyToString(data.Host))
+	params.Set("path", anyToString(data.Path))
 	params.Set("mode", "")
-	if tlsStr := strings.ToLower(data.TLSStr()); tlsStr == "tls" || strings.ToLower(data.Security) == "tls" {
+	if tlsStr := strings.ToLower(anyToString(data.TLS)); tlsStr == "tls" || strings.ToLower(data.Security) == "tls" {
 		params.Set("security", "tls")
-		params.Set("sni", data.SNIStr())
-		params.Set("alpn", data.ALPNStr())
-		params.Set("fp", data.FPStr())
-		params.Set("allowInsecure", data.AllowInsecureStr())
+		params.Set("sni", anyToString(data.SNI))
+		params.Set("alpn", anyToString(data.ALPN))
+		params.Set("fp", anyToString(data.FP))
+		params.Set("allowInsecure", anyToString(data.AllowInsecure))
 	}
 
 	xcfg, err := parseXHTTPTransportParams(params, host, int(port))
