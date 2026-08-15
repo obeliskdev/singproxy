@@ -22,7 +22,7 @@ func newXhttpH3Transport(tlsCfg *xhttpTLSConfig, keepAlivePeriod time.Duration, 
 
 	var stdTLSConfig *tls.Config
 	if tlsCfg != nil {
-		if cfg, err := tlsCfg.singBoxConfig.Config(); err == nil && cfg != nil {
+		if cfg, err := tlsCfg.singBoxConfig.STDConfig(); err == nil && cfg != nil {
 			stdTLSConfig = cfg.Clone()
 		}
 		if stdTLSConfig == nil {
@@ -47,7 +47,7 @@ func newXhttpH3Transport(tlsCfg *xhttpTLSConfig, keepAlivePeriod time.Duration, 
 	transport := &http3.Transport{
 		TLSClientConfig: stdTLSConfig,
 		QUICConfig:      quicConfig,
-		Dial: func(ctx context.Context, addr string, tlsCfg2 *tls.Config, cfg *quic.Config) (quic.EarlyConnection, error) {
+		Dial: func(ctx context.Context, addr string, tlsCfg2 *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 			host, portStr, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, err

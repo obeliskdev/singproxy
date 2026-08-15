@@ -10,6 +10,7 @@ import (
 
 	boxTLS "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/logger"
 )
 
 type xhttpTLSConfig struct {
@@ -18,6 +19,7 @@ type xhttpTLSConfig struct {
 	serverName    string
 	alpn          []string
 	insecure      bool
+	forceH2C      bool
 }
 
 func newXHTTPTLSConfig(ctx context.Context, params tlsParams) (*xhttpTLSConfig, error) {
@@ -50,10 +52,12 @@ func newXHTTPTLSConfig(ctx context.Context, params tlsParams) (*xhttpTLSConfig, 
 
 	var cfg boxTLS.Config
 	var err error
+	noopLogger := logger.NOP()
+
 	if params.reality {
-		cfg, err = boxTLS.NewRealityClient(ctx, params.serverAddress, *tlsOpts)
+		cfg, err = boxTLS.NewRealityClient(ctx, noopLogger, params.serverAddress, *tlsOpts)
 	} else {
-		cfg, err = boxTLS.NewClient(ctx, params.serverAddress, *tlsOpts)
+		cfg, err = boxTLS.NewClient(ctx, noopLogger, params.serverAddress, *tlsOpts)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("xhttp tls config: %w", err)
@@ -65,6 +69,7 @@ func newXHTTPTLSConfig(ctx context.Context, params tlsParams) (*xhttpTLSConfig, 
 		serverName:    params.sni,
 		alpn:          params.alpn,
 		insecure:      params.insecure,
+		forceH2C:      params.fingerprint != "" || params.reality,
 	}, nil
 }
 

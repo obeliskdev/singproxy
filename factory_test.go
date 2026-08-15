@@ -50,15 +50,24 @@ func TestFromURL(t *testing.T) {
 			name: "WireGuard",
 			url:  "wireguard://" + url.PathEscape(wgPrivateKey) + "@wg.example.com:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=192.168.1.1/32&address=fd00::1/128",
 			validate: func(t *testing.T, p Proxy) {
-				opts := p.(*SingBoxProxy).options.(*option.LegacyWireGuardOutboundOptions)
+				opts := p.(*SingBoxProxy).options.(*option.WireGuardEndpointOptions)
 				expectedAddrs := []string{"192.168.1.1/32", "fd00::1/128"}
-				if len(opts.LocalAddress) != len(expectedAddrs) {
-					t.Fatalf("WireGuard parsing failed. Expected %d addresses, got %d", len(expectedAddrs), len(opts.LocalAddress))
+				if len(opts.Address) != len(expectedAddrs) {
+					t.Fatalf("WireGuard parsing failed. Expected %d addresses, got %d", len(expectedAddrs), len(opts.Address))
 				}
-				for i := range opts.LocalAddress {
-					if opts.LocalAddress[i].String() != expectedAddrs[i] {
-						t.Errorf("WireGuard address mismatch. Got %s, expected %s", opts.LocalAddress[i].String(), expectedAddrs[i])
+				for i := range opts.Address {
+					if opts.Address[i].String() != expectedAddrs[i] {
+						t.Errorf("WireGuard address mismatch. Got %s, expected %s", opts.Address[i].String(), expectedAddrs[i])
 					}
+				}
+				if len(opts.Peers) != 1 {
+					t.Fatalf("WireGuard parsing failed. Expected 1 peer, got %d", len(opts.Peers))
+				}
+				if opts.Peers[0].Address != "wg.example.com" || opts.Peers[0].Port != 51820 {
+					t.Errorf("WireGuard peer endpoint mismatch. Got %s:%d", opts.Peers[0].Address, opts.Peers[0].Port)
+				}
+				if opts.Peers[0].PublicKey != wgPublicKey {
+					t.Errorf("WireGuard peer public key mismatch. Got %s", opts.Peers[0].PublicKey)
 				}
 			},
 		},

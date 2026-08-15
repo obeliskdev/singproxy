@@ -2,7 +2,13 @@ package singproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -10,12 +16,6 @@ import (
 	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/route"
-	"net"
-	"net/url"
-	"reflect"
-	"strings"
-	"sync"
-	"time"
 
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
@@ -27,12 +27,15 @@ import (
 )
 
 type SingBoxProxy struct {
-	options  any
-	outbound adapter.Outbound
-	original string
-	proxyIP  net.IP
-	typed    string
-	cfg      Config
+	options   any
+	outbound  adapter.Outbound
+	original  string
+	proxyIP   net.IP
+	typed     string
+	cfg       Config
+	startMu   sync.Mutex
+	started   bool
+	startFunc func() error
 }
 
 var globalBox *singBoxContext
@@ -40,6 +43,7 @@ var globalBox *singBoxContext
 type singBoxContext struct {
 	ctx              context.Context
 	outboundRegistry adapter.OutboundRegistry
+	endpointRegistry adapter.EndpointRegistry
 	logger           log.ContextLogger
 }
 
@@ -76,30 +80,30 @@ func init() {
 	connManager := route.NewConnectionManager(nopLogger)
 	inboundManager := inbound.NewManager(nopLogger, inboundRegistry, endpointManager)
 
-	dnsRouter := dns.NewRouter(ctx, log.NewNOPFactory(), option.DNSOptions{})
+	dnsTransportManager.Initialize(func() (adapter.DNSTransport, error) {
+		return local.NewTransport(ctx, nopLogger, "local", option.LocalDNSServerOptions{})
+	})
 
-	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
 	service.MustRegister[adapter.EndpointManager](ctx, endpointManager)
 	service.MustRegister[adapter.OutboundManager](ctx, outboundManager)
 	service.MustRegister[adapter.DNSTransportManager](ctx, dnsTransportManager)
 	service.MustRegister[adapter.ConnectionManager](ctx, connManager)
 	service.MustRegister[adapter.InboundManager](ctx, inboundManager)
 
-	localTransport, err := local.NewTransport(
-		ctx,
-		nopLogger,
-		"local",
-		option.LocalDNSServerOptions{},
-	)
-
-	if err != nil {
-		panic(fmt.Sprintf("failed to create local DNS transport: %v", err))
+	if err := dnsTransportManager.Start(adapter.StartStateStart); err != nil {
+		panic(fmt.Sprintf("failed to start DNS transport manager: %v", err))
 	}
-	dnsTransportManager.Initialize(localTransport)
+
+	dnsRouter := dns.NewRouter(ctx, log.NewNOPFactory(), option.DNSOptions{})
+	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
+	if err := dnsRouter.Start(adapter.StartStateStart); err != nil {
+		panic(fmt.Sprintf("failed to start DNS router: %v", err))
+	}
 
 	globalBox = &singBoxContext{
 		ctx:              ctx,
 		outboundRegistry: outboundRegistry,
+		endpointRegistry: endpointRegistry,
 		logger:           nopLogger,
 	}
 }
@@ -111,7 +115,7 @@ func FromURL(cfg Config, proxyURL string) (Proxy, error) {
 		return nil, fmt.Errorf("%w: proxy string is empty", ErrInvalidProxyFormat)
 	}
 	if proxyURL == "direct" {
-		if cfg.DirectTimeout == 0 || cfg.DirectTimeout == defaultDirectTimeout {
+		if cfg.DirectTimeout == defaultDirectTimeout {
 			return Direct, nil
 		}
 		return newDirectProxy(cfg), nil
@@ -155,6 +159,10 @@ func newSingBoxProxy(
 		cfg:      cfg,
 	}
 
+	if typed == "wireguard" {
+		return newWireGuardProxy(p, parsedURL)
+	}
+
 	options, loaded := globalBox.outboundRegistry.CreateOptions(p.typed)
 	if !loaded {
 		return nil, fmt.Errorf("unknown proxy type: %s", p.typed)
@@ -171,14 +179,14 @@ func newSingBoxProxy(
 
 	p.options = options
 	p.outbound = createOutbound
-	p.resolveAndStoreAddr()
+	p.resolveHostAddr()
 	return p, nil
 }
 
 func FromURLs(cfg Config, urls ...string) ([]Proxy, []error) {
 	var (
 		proxies = make([]Proxy, 0, len(urls))
-		errors  = make([]error, 0)
+		errs    = make([]error, 0)
 		wg      sync.WaitGroup
 	)
 
@@ -207,13 +215,13 @@ func FromURLs(cfg Config, urls ...string) ([]Proxy, []error) {
 
 	for res := range results {
 		if res.err != nil {
-			errors = append(errors, res.err)
+			errs = append(errs, res.err)
 		} else if res.proxy != nil {
 			proxies = append(proxies, res.proxy)
 		}
 	}
 
-	return proxies, errors
+	return proxies, errs
 }
 
 func (p *SingBoxProxy) String() string {
@@ -222,11 +230,6 @@ func (p *SingBoxProxy) String() string {
 
 func (p *SingBoxProxy) Addr() net.IP {
 	return p.proxyIP
-}
-
-type connResult struct {
-	conn net.Conn
-	err  error
 }
 
 func (p *SingBoxProxy) DialContext(ctx context.Context, network string, addr string) (net.Conn, error) {
@@ -248,63 +251,57 @@ func (p *SingBoxProxy) dialSocksaddr(ctx context.Context, network string, target
 		return nil, &net.OpError{Op: "dial", Net: network, Err: net.UnknownNetworkError(network)}
 	}
 
-	resC := make(chan connResult, 1)
-	go func() {
-		conn, err := p.outbound.DialContext(context.Background(), network, targetAddr)
-		resC <- connResult{conn, err}
-	}()
-
-	timer := time.NewTimer(p.cfg.DialTimeout)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		go discardResult(resC)
-		return nil, ctx.Err()
-	case <-timer.C:
-		go discardResult(resC)
-		return nil, ErrProxyDialTimeoutReached
-	case res := <-resC:
-		return res.conn, res.err
-	}
-}
-
-func discardResult(resC <-chan connResult) {
-	if res := <-resC; res.conn != nil {
-		_ = res.conn.Close()
-	}
-}
-
-func (p *SingBoxProxy) resolveAndStoreAddr() {
-	v := reflect.ValueOf(p.options)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-	if v.Kind() != reflect.Struct {
-		return
+	if err := p.ensureStarted(); err != nil {
+		return nil, err
 	}
 
-	host := v.FieldByName("Server").String()
-	if host == "" {
-		if so := v.FieldByName("ServerOptions"); so.IsValid() {
-			if so.Kind() == reflect.Ptr {
-				so = so.Elem()
-			}
-			if so.Kind() == reflect.Struct {
-				host = so.FieldByName("Server").String()
-			}
+	ctx, cancel := context.WithTimeout(ctx, p.cfg.DialTimeout)
+	defer cancel()
+
+	conn, err := p.outbound.DialContext(ctx, network, targetAddr)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, ErrProxyDialTimeoutReached
 		}
+		return nil, err
 	}
+	return conn, nil
+}
 
-	if host == "" {
+func (p *SingBoxProxy) ensureStarted() error {
+	if p.startFunc == nil {
+		return nil
+	}
+	p.startMu.Lock()
+	defer p.startMu.Unlock()
+	if p.started {
+		return nil
+	}
+	if err := p.startFunc(); err != nil {
+		return err
+	}
+	p.started = true
+	return nil
+}
+
+func (p *SingBoxProxy) resolveHostAddr() {
+	host, ok := p.options.(option.ServerOptionsWrapper)
+	if !ok {
 		return
+	}
+	p.proxyIP = resolveHostIP(host.TakeServerOptions().Server)
+}
+
+func resolveHostIP(host string) net.IP {
+	if host == "" {
+		return nil
 	}
 	if parsedIP := net.ParseIP(host); parsedIP != nil {
-		p.proxyIP = parsedIP
-		return
+		return parsedIP
 	}
 	ips, err := net.LookupIP(host)
 	if err == nil && len(ips) > 0 {
-		p.proxyIP = ips[0]
+		return ips[0]
 	}
+	return nil
 }

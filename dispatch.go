@@ -101,10 +101,6 @@ func parseProxyURL(out any, u *url.URL, typed string, timeout time.Duration) (er
 		options := out.(*option.SOCKSOutboundOptions)
 		options.DialerOptions = dialerOptions
 		return parseSOCKS(options, u)
-	case "wireguard":
-		options := out.(*option.LegacyWireGuardOutboundOptions)
-		options.DialerOptions = dialerOptions
-		return parseWireGuard(options, u)
 	case "shadowtls":
 		options := out.(*option.ShadowTLSOutboundOptions)
 		options.DialerOptions = dialerOptions
