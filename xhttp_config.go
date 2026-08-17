@@ -9,6 +9,8 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -140,6 +142,91 @@ type xhttpConfig struct {
 	DownloadConfig       *xhttpConfig
 
 	TLSConfig *xhttpTLSConfig
+
+	norm   atomic.Pointer[xhttpNormalized]
+	masqMu sync.Mutex
+	masq   xhttpMasqueradeCache
+}
+
+type xhttpNormalized struct {
+	rawPath                 string
+	rawUplinkHTTPMethod     string
+	rawScMaxEachPostBytes   string
+	rawScMinPostsIntervalMs string
+	rawXPaddingBytes        string
+	rawSessionPlacement     string
+	rawSessionKey           string
+	rawSeqPlacement         string
+	rawSeqKey               string
+	rawUplinkDataPlacement  string
+	rawUplinkChunkSize      string
+	path                    string
+	uplinkHTTPMethod        string
+	uplinkDataPlacement     string
+	sessionPlacement        string
+	sessionKey              string
+	seqPlacement            string
+	seqKey                  string
+	scMaxEachPostBytes      xhttpRange
+	scMinPostsIntervalMs    xhttpRange
+	xPaddingBytes           xhttpRange
+	uplinkChunkSize         xhttpRange
+	scMaxEachPostBytesErr   error
+	scMinPostsIntervalErr   error
+	xPaddingBytesErr        error
+	uplinkChunkSizeErr      error
+}
+
+func (n *xhttpNormalized) matches(c *xhttpConfig) bool {
+	return n.rawPath == c.Path &&
+		n.rawUplinkHTTPMethod == c.UplinkHTTPMethod &&
+		n.rawScMaxEachPostBytes == c.ScMaxEachPostBytes &&
+		n.rawScMinPostsIntervalMs == c.ScMinPostsIntervalMs &&
+		n.rawXPaddingBytes == c.XPaddingBytes &&
+		n.rawSessionPlacement == c.SessionPlacement &&
+		n.rawSessionKey == c.SessionKey &&
+		n.rawSeqPlacement == c.SeqPlacement &&
+		n.rawSeqKey == c.SeqKey &&
+		n.rawUplinkDataPlacement == c.UplinkDataPlacement &&
+		n.rawUplinkChunkSize == c.UplinkChunkSize
+}
+
+func (c *xhttpConfig) normalized() *xhttpNormalized {
+	if n := c.norm.Load(); n != nil && n.matches(c) {
+		return n
+	}
+	n := &xhttpNormalized{
+		rawPath:                 c.Path,
+		rawUplinkHTTPMethod:     c.UplinkHTTPMethod,
+		rawScMaxEachPostBytes:   c.ScMaxEachPostBytes,
+		rawScMinPostsIntervalMs: c.ScMinPostsIntervalMs,
+		rawXPaddingBytes:        c.XPaddingBytes,
+		rawSessionPlacement:     c.SessionPlacement,
+		rawSessionKey:           c.SessionKey,
+		rawSeqPlacement:         c.SeqPlacement,
+		rawSeqKey:               c.SeqKey,
+		rawUplinkDataPlacement:  c.UplinkDataPlacement,
+		rawUplinkChunkSize:      c.UplinkChunkSize,
+	}
+	n.path = c.computeNormalizedPath()
+	n.uplinkHTTPMethod = c.computeUplinkHTTPMethod()
+	n.uplinkDataPlacement = c.computeUplinkDataPlacement()
+	n.sessionPlacement = c.computeSessionPlacement()
+	n.sessionKey = c.computeSessionKey(n.sessionPlacement)
+	n.seqPlacement = c.computeSeqPlacement()
+	n.seqKey = c.computeSeqKey(n.seqPlacement)
+	n.scMaxEachPostBytes, n.scMaxEachPostBytesErr = xhttpParseRange(c.ScMaxEachPostBytes, "1000000")
+	if n.scMaxEachPostBytesErr == nil && n.scMaxEachPostBytes.Max == 0 {
+		n.scMaxEachPostBytesErr = fmt.Errorf("invalid sc-max-each-post-bytes: must be greater than zero")
+	}
+	n.scMinPostsIntervalMs, n.scMinPostsIntervalErr = xhttpParseRange(c.ScMinPostsIntervalMs, "30")
+	if n.scMinPostsIntervalErr == nil && n.scMinPostsIntervalMs.Max == 0 {
+		n.scMinPostsIntervalErr = fmt.Errorf("invalid sc-min-posts-interval-ms: must be greater than zero")
+	}
+	n.xPaddingBytes, n.xPaddingBytesErr = xhttpParseRange(c.XPaddingBytes, "100-1000")
+	n.uplinkChunkSize, n.uplinkChunkSizeErr = c.computeUplinkChunkSize(n.uplinkDataPlacement, n.scMaxEachPostBytes, n.scMaxEachPostBytesErr)
+	c.norm.Store(n)
+	return n
 }
 
 func (c *xhttpConfig) NormalizedMode() string {
@@ -163,7 +250,7 @@ func (c *xhttpConfig) EffectiveMode(hasReality bool) string {
 	return "packet-up"
 }
 
-func (c *xhttpConfig) NormalizedPath() string {
+func (c *xhttpConfig) computeNormalizedPath() string {
 	path := c.Path
 	if path == "" {
 		path = "/"
@@ -177,69 +264,62 @@ func (c *xhttpConfig) NormalizedPath() string {
 	return path
 }
 
-func (c *xhttpConfig) GetNormalizedUplinkHTTPMethod() string {
+func (c *xhttpConfig) NormalizedPath() string {
+	return c.normalized().path
+}
+
+func (c *xhttpConfig) computeUplinkHTTPMethod() string {
 	if c.UplinkHTTPMethod == "" {
 		return "POST"
 	}
 	return c.UplinkHTTPMethod
 }
 
+func (c *xhttpConfig) GetNormalizedUplinkHTTPMethod() string {
+	return c.normalized().uplinkHTTPMethod
+}
+
 func (c *xhttpConfig) GetNormalizedScMaxEachPostBytes() (xhttpRange, error) {
-	r, err := xhttpParseRange(c.ScMaxEachPostBytes, "1000000")
-	if err != nil {
-		return xhttpRange{}, fmt.Errorf("invalid sc-max-each-post-bytes: %w", err)
-	}
-	if r.Max == 0 {
-		return xhttpRange{}, fmt.Errorf("invalid sc-max-each-post-bytes: must be greater than zero")
-	}
-	return r, nil
+	n := c.normalized()
+	return n.scMaxEachPostBytes, n.scMaxEachPostBytesErr
 }
 
 func (c *xhttpConfig) GetNormalizedScMinPostsIntervalMs() (xhttpRange, error) {
-	r, err := xhttpParseRange(c.ScMinPostsIntervalMs, "30")
-	if err != nil {
-		return xhttpRange{}, fmt.Errorf("invalid sc-min-posts-interval-ms: %w", err)
-	}
-	if r.Max == 0 {
-		return xhttpRange{}, fmt.Errorf("invalid sc-min-posts-interval-ms: must be greater than zero")
-	}
-	return r, nil
+	n := c.normalized()
+	return n.scMinPostsIntervalMs, n.scMinPostsIntervalErr
 }
 
 func (c *xhttpConfig) GetNormalizedXPaddingBytes() (xhttpRange, error) {
-	r, err := xhttpParseRange(c.XPaddingBytes, "100-1000")
-	if err != nil {
-		return xhttpRange{}, fmt.Errorf("invalid x-padding-bytes: %w", err)
-	}
-	return r, nil
+	n := c.normalized()
+	return n.xPaddingBytes, n.xPaddingBytesErr
 }
 
-func (c *xhttpConfig) GetNormalizedSessionPlacement() string {
+func (c *xhttpConfig) computeSessionPlacement() string {
 	if c.SessionPlacement == "" {
 		return xhttpPlacementPath
 	}
 	return c.SessionPlacement
 }
 
-func (c *xhttpConfig) GetNormalizedSeqPlacement() string {
+func (c *xhttpConfig) computeSeqPlacement() string {
 	if c.SeqPlacement == "" {
 		return xhttpPlacementPath
 	}
 	return c.SeqPlacement
 }
 
-func (c *xhttpConfig) GetNormalizedUplinkDataPlacement() string {
+func (c *xhttpConfig) computeUplinkDataPlacement() string {
 	if c.UplinkDataPlacement == "" {
 		return xhttpPlacementBody
 	}
 	return c.UplinkDataPlacement
 }
 
-func (c *xhttpConfig) GetNormalizedSessionKey() string {
+func (c *xhttpConfig) computeSessionKey(placement string) string {
 	if c.SessionKey != "" {
 		return c.SessionKey
 	}
-	switch c.GetNormalizedSessionPlacement() {
+	switch placement {
 	case xhttpPlacementHeader:
 		return "X-Session"
 	case xhttpPlacementCookie, xhttpPlacementQuery:
@@ -249,11 +329,11 @@ func (c *xhttpConfig) GetNormalizedSessionKey() string {
 	}
 }
 
-func (c *xhttpConfig) GetNormalizedSeqKey() string {
+func (c *xhttpConfig) computeSeqKey(placement string) string {
 	if c.SeqKey != "" {
 		return c.SeqKey
 	}
-	switch c.GetNormalizedSeqPlacement() {
+	switch placement {
 	case xhttpPlacementHeader:
 		return "X-Seq"
 	case xhttpPlacementCookie, xhttpPlacementQuery:
@@ -263,19 +343,39 @@ func (c *xhttpConfig) GetNormalizedSeqKey() string {
 	}
 }
 
-func (c *xhttpConfig) GetNormalizedUplinkChunkSize() (xhttpRange, error) {
+func (c *xhttpConfig) GetNormalizedUplinkDataPlacement() string {
+	return c.normalized().uplinkDataPlacement
+}
+
+func (c *xhttpConfig) GetNormalizedSessionPlacement() string {
+	return c.normalized().sessionPlacement
+}
+
+func (c *xhttpConfig) GetNormalizedSeqPlacement() string {
+	return c.normalized().seqPlacement
+}
+
+func (c *xhttpConfig) GetNormalizedSessionKey() string {
+	return c.normalized().sessionKey
+}
+
+func (c *xhttpConfig) GetNormalizedSeqKey() string {
+	return c.normalized().seqKey
+}
+
+func (c *xhttpConfig) computeUplinkChunkSize(placement string, scMax xhttpRange, scMaxErr error) (xhttpRange, error) {
 	uplinkChunkSize, err := xhttpParseRange(c.UplinkChunkSize, "")
 	if err != nil {
 		return xhttpRange{}, fmt.Errorf("invalid uplink-chunk-size: %w", err)
 	}
 	if uplinkChunkSize.Max == 0 {
-		switch c.GetNormalizedUplinkDataPlacement() {
+		switch placement {
 		case xhttpPlacementCookie:
 			return xhttpRange{Min: 2 * 1024, Max: 3 * 1024}, nil
 		case xhttpPlacementHeader:
 			return xhttpRange{Min: 3 * 1024, Max: 4 * 1024}, nil
 		default:
-			return c.GetNormalizedScMaxEachPostBytes()
+			return scMax, scMaxErr
 		}
 	} else if uplinkChunkSize.Min < 64 {
 		uplinkChunkSize.Min = 64
@@ -284,6 +384,11 @@ func (c *xhttpConfig) GetNormalizedUplinkChunkSize() (xhttpRange, error) {
 		}
 	}
 	return uplinkChunkSize, nil
+}
+
+func (c *xhttpConfig) GetNormalizedUplinkChunkSize() (xhttpRange, error) {
+	n := c.normalized()
+	return n.uplinkChunkSize, n.uplinkChunkSizeErr
 }
 
 var xhttpPredefinedTable = map[string]string{

@@ -100,41 +100,77 @@ func xhttpGetGreasedChUa(majorVersion int, forkName string) string {
 	return strings.Join(shuffledCh, ", ")
 }
 
-func xhttpApplyMasqueradedHeaders(header http.Header, browser string, variant string) {
+type xhttpMasqueradeCache struct {
+	day           int64
+	chromeUA      string
+	chromeSecCHUA string
+	edgeUA        string
+	edgeSecCHUA   string
+	firefoxUA     string
+	safariUA      string
+	curlUA        string
+}
+
+func buildMasqueradeCache(day int64) xhttpMasqueradeCache {
+	chromeVersion := xhttpChromeVersion()
+	firefoxVersion := xhttpFirefoxVersion()
+	cache := xhttpMasqueradeCache{day: day}
+	cache.chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + strconv.Itoa(chromeVersion) + ".0.0.0 Safari/537.36"
+	cache.chromeSecCHUA = xhttpGetGreasedChUa(chromeVersion, "chrome")
+	cache.edgeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + strconv.Itoa(chromeVersion) + ".0.0.0 Safari/537.36 Edg/" + strconv.Itoa(chromeVersion) + ".0.0.0"
+	cache.edgeSecCHUA = xhttpGetGreasedChUa(chromeVersion, "edge")
+	cache.firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:" + strconv.Itoa(firefoxVersion) + ".0) Gecko/20100101 Firefox/" + strconv.Itoa(firefoxVersion) + ".0"
+	cache.safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/" + xhttpSafariVersion() + " Safari/605.1.15"
+	cache.curlUA = "curl/" + xhttpCurlVersion()
+	return cache
+}
+
+func (c *xhttpConfig) masquerade() *xhttpMasqueradeCache {
+	day := time.Now().Unix() / 86400
+	c.masqMu.Lock()
+	defer c.masqMu.Unlock()
+	if c.masq.day != day {
+		c.masq = buildMasqueradeCache(day)
+	}
+	return &c.masq
+}
+
+func (c *xhttpConfig) applyMasqueradedHeaders(header http.Header, variant string) {
+	browser := "chrome"
+	if ua := header.Get("User-Agent"); ua != "" {
+		switch ua {
+		case "chrome", "firefox", "safari", "edge", "curl", "golang":
+			browser = ua
+		}
+	}
+	cache := c.masquerade()
 	switch browser {
 	case "chrome":
-		anchoredChromeVersion := xhttpChromeVersion()
-		chromeUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + strconv.Itoa(anchoredChromeVersion) + ".0.0.0 Safari/537.36"
-		header["Sec-CH-UA"] = []string{xhttpGetGreasedChUa(anchoredChromeVersion, "chrome")}
+		header["Sec-CH-UA"] = []string{cache.chromeSecCHUA}
 		header["Sec-CH-UA-Mobile"] = []string{"?0"}
 		header["Sec-CH-UA-Platform"] = []string{"\"Windows\""}
 		header["DNT"] = []string{"1"}
-		header.Set("User-Agent", chromeUA)
+		header.Set("User-Agent", cache.chromeUA)
 		header.Set("Accept-Language", "en-US,en;q=0.9")
 	case "edge":
-		anchoredChromeVersion := xhttpChromeVersion()
-		msEdgeUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + strconv.Itoa(anchoredChromeVersion) + ".0.0.0 Safari/537.36 Edg/" + strconv.Itoa(anchoredChromeVersion) + ".0.0.0"
-		header["Sec-CH-UA"] = []string{xhttpGetGreasedChUa(anchoredChromeVersion, "edge")}
+		header["Sec-CH-UA"] = []string{cache.edgeSecCHUA}
 		header["Sec-CH-UA-Mobile"] = []string{"?0"}
 		header["Sec-CH-UA-Platform"] = []string{"\"Windows\""}
 		header["DNT"] = []string{"1"}
-		header.Set("User-Agent", msEdgeUA)
+		header.Set("User-Agent", cache.edgeUA)
 		header.Set("Accept-Language", "en-US,en;q=0.9")
 	case "firefox":
-		anchoredFirefoxVersion := strconv.Itoa(xhttpFirefoxVersion())
-		firefoxUA := "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:" + anchoredFirefoxVersion + ".0) Gecko/20100101 Firefox/" + anchoredFirefoxVersion + ".0"
-		header.Set("User-Agent", firefoxUA)
+		header.Set("User-Agent", cache.firefoxUA)
 		header["DNT"] = []string{"1"}
 		header.Set("Accept-Language", "en-US,en;q=0.5")
 	case "safari":
-		safariUA := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/" + xhttpSafariVersion() + " Safari/605.1.15"
-		header.Set("User-Agent", safariUA)
+		header.Set("User-Agent", cache.safariUA)
 		header.Set("Accept-Language", "en-US,en;q=0.9")
 	case "golang":
 		delete(header, "User-Agent")
 		return
 	case "curl":
-		header.Set("User-Agent", "curl/"+xhttpCurlVersion())
+		header.Set("User-Agent", cache.curlUA)
 		return
 	}
 	switch variant {
@@ -205,15 +241,4 @@ func xhttpApplyMasqueradedHeaders(header http.Header, browser string, variant st
 			header.Set("Accept", "*/*")
 		}
 	}
-}
-
-func (c *xhttpConfig) applyMasqueradedHeaders(header http.Header, variant string) {
-	browser := "chrome"
-	if ua := header.Get("User-Agent"); ua != "" {
-		switch ua {
-		case "chrome", "firefox", "safari", "edge", "curl", "golang":
-			browser = ua
-		}
-	}
-	xhttpApplyMasqueradedHeaders(header, browser, variant)
 }
