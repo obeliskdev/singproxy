@@ -33,7 +33,6 @@ type xhttpPaddingPlacement struct {
 	Placement string
 	Key       string
 	Header    string
-	RawURL    string
 }
 
 type xhttpPaddingConfig struct {
@@ -50,9 +49,9 @@ func xhttpRandStringFromCharset(n int, charset string) (string, bool) {
 	limit := byte(256 - (256 % m))
 	result := make([]byte, n)
 	i := 0
-	buf := make([]byte, 256)
+	var buf [256]byte
 	for i < n {
-		if _, err := rand.Read(buf); err != nil {
+		if _, err := rand.Read(buf[:]); err != nil {
 			return "", false
 		}
 		for _, rb := range buf {
@@ -81,33 +80,41 @@ func xhttpGenerateTokenishPaddingBase62(targetHuffmanBytes int) string {
 	if n < 1 {
 		n = 1
 	}
-	randBase62Str, ok := xhttpRandStringFromCharset(n, xhttpCharsetBase62)
+	randBase62, ok := xhttpRandBytesFromCharset(n, xhttpCharsetBase62)
 	if !ok {
 		return ""
 	}
 	const maxIter = 150
 	adjustChar := byte('X')
 	for iter := 0; iter < maxIter; iter++ {
-		currentLength := int(hpack.HuffmanEncodeLength(randBase62Str))
+		currentLength := int(hpack.HuffmanEncodeLength(string(randBase62)))
 		diff := currentLength - targetHuffmanBytes
 		if xhttpAbsInt(diff) <= xhttpValidationTolerance {
-			return randBase62Str
+			return string(randBase62)
 		}
 		if diff < 0 {
-			randBase62Str += string(adjustChar)
+			randBase62 = append(randBase62, adjustChar)
 			if adjustChar == 'X' {
 				adjustChar = 'Z'
 			} else {
 				adjustChar = 'X'
 			}
 		} else {
-			if len(randBase62Str) <= 1 {
-				return randBase62Str
+			if len(randBase62) <= 1 {
+				return string(randBase62)
 			}
-			randBase62Str = randBase62Str[:len(randBase62Str)-1]
+			randBase62 = randBase62[:len(randBase62)-1]
 		}
 	}
-	return randBase62Str
+	return string(randBase62)
+}
+
+func xhttpRandBytesFromCharset(n int, charset string) ([]byte, bool) {
+	s, ok := xhttpRandStringFromCharset(n, charset)
+	if !ok {
+		return nil, false
+	}
+	return []byte(s), true
 }
 
 func xhttpGeneratePadding(method xhttpPaddingMethod, length int) string {
@@ -128,14 +135,13 @@ func xhttpGeneratePadding(method xhttpPaddingMethod, length int) string {
 	}
 }
 
-func (c *xhttpConfig) buildXPaddingConfig(reqURL string, length int) xhttpPaddingConfig {
+func (c *xhttpConfig) buildXPaddingConfig(length int) xhttpPaddingConfig {
 	config := xhttpPaddingConfig{Length: length}
 	if c.XPaddingObfsMode {
 		config.Placement = xhttpPaddingPlacement{
 			Placement: c.XPaddingPlacement,
 			Key:       c.XPaddingKey,
 			Header:    c.XPaddingHeader,
-			RawURL:    reqURL,
 		}
 		config.Method = xhttpPaddingMethod(c.XPaddingMethod)
 	} else {
@@ -143,7 +149,6 @@ func (c *xhttpConfig) buildXPaddingConfig(reqURL string, length int) xhttpPaddin
 			Placement: xhttpPlacementQueryInHeader,
 			Key:       "x_padding",
 			Header:    "Referer",
-			RawURL:    reqURL,
 		}
 	}
 	return config
@@ -154,29 +159,20 @@ func (c *xhttpConfig) applyXPaddingToHeader(h http.Header, config xhttpPaddingCo
 		return
 	}
 	paddingValue := xhttpGeneratePadding(config.Method, config.Length)
-	switch p := config.Placement; p.Placement {
-	case xhttpPlacementHeader:
-		h.Set(p.Header, paddingValue)
-	case xhttpPlacementQueryInHeader:
-		u, err := url.Parse(p.RawURL)
-		if err != nil || u == nil {
-			return
-		}
-		u.RawQuery = p.Key + "=" + paddingValue
-		h.Set(p.Header, u.String())
-	}
+	h.Set(config.Placement.Header, paddingValue)
 }
 
 func (c *xhttpConfig) applyXPaddingToRequest(reqHeaders http.Header, reqURL *url.URL, config xhttpPaddingConfig) {
-	placement := config.Placement.Placement
-	if placement == xhttpPlacementHeader || placement == xhttpPlacementQueryInHeader {
+	switch p := config.Placement; p.Placement {
+	case xhttpPlacementHeader:
 		c.applyXPaddingToHeader(reqHeaders, config)
-		return
-	}
-	paddingValue := xhttpGeneratePadding(config.Method, config.Length)
-	if placement == xhttpPlacementQuery {
+	case xhttpPlacementQueryInHeader:
+		u := *reqURL
+		u.RawQuery = p.Key + "=" + xhttpGeneratePadding(config.Method, config.Length)
+		reqHeaders.Set(p.Header, u.String())
+	case xhttpPlacementQuery:
 		q := reqURL.Query()
-		q.Set(config.Placement.Key, paddingValue)
+		q.Set(p.Key, xhttpGeneratePadding(config.Method, config.Length))
 		reqURL.RawQuery = q.Encode()
 	}
 }
@@ -188,7 +184,7 @@ func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *u
 	if err != nil {
 		return err
 	}
-	c.applyXPaddingToRequest(reqHeaders, reqURL, c.buildXPaddingConfig(reqURL.String(), xPaddingBytes.Rand()))
+	c.applyXPaddingToRequest(reqHeaders, reqURL, c.buildXPaddingConfig(xPaddingBytes.Rand()))
 	c.applyMetaToRequest(reqHeaders, reqURL, sessionID, "")
 
 	if hasBody && !c.NoGRPCHeader {
@@ -231,7 +227,7 @@ func (c *xhttpConfig) fillPacketRequestHeaders(reqHeaders http.Header, reqURL *u
 	if err != nil {
 		return err
 	}
-	c.applyXPaddingToRequest(reqHeaders, reqURL, c.buildXPaddingConfig(reqURL.String(), xPaddingBytes.Rand()))
+	c.applyXPaddingToRequest(reqHeaders, reqURL, c.buildXPaddingConfig(xPaddingBytes.Rand()))
 	c.applyMetaToRequest(reqHeaders, reqURL, sessionId, seqStr)
 
 	return nil

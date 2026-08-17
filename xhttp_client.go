@@ -36,20 +36,30 @@ type xhttpPacketUpWriter struct {
 	buf                  []byte
 	timer                *time.Timer
 	flushErr             error
+	reqURL               string
+	method               string
+	discardBuf           []byte
 }
 
 func (c *xhttpPacketUpWriter) Write(b []byte) (int, error) {
+	total := len(b)
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if err := c.flushErr; err != nil {
 		return 0, err
 	}
-	data := bytes.NewBuffer(b)
-	for data.Len() > 0 {
+	for len(b) > 0 {
 		if c.timer == nil {
 			c.timer = time.AfterFunc(time.Duration(c.scMinPostsIntervalMs.Rand())*time.Millisecond, c.flush)
 		}
-		c.buf = append(c.buf, data.Next(c.scMaxEachPostBytes-len(c.buf))...)
+		room := c.scMaxEachPostBytes - len(c.buf)
+		if room > 0 {
+			if room > len(b) {
+				room = len(b)
+			}
+			c.buf = append(c.buf, b[:room]...)
+			b = b[room:]
+		}
 		if len(c.buf) >= c.scMaxEachPostBytes {
 			c.writeCond.Wait()
 			if err := c.flushErr; err != nil {
@@ -57,7 +67,7 @@ func (c *xhttpPacketUpWriter) Write(b []byte) (int, error) {
 			}
 		}
 	}
-	return len(b), nil
+	return total, nil
 }
 
 func (c *xhttpPacketUpWriter) flush() {
@@ -79,12 +89,7 @@ func (c *xhttpPacketUpWriter) flush() {
 }
 
 func (c *xhttpPacketUpWriter) write(b []byte) (int, error) {
-	u := url.URL{
-		Scheme: "https",
-		Host:   c.cfg.Host,
-		Path:   c.cfg.NormalizedPath(),
-	}
-	req, err := http.NewRequestWithContext(c.ctx, c.cfg.GetNormalizedUplinkHTTPMethod(), u.String(), nil)
+	req, err := http.NewRequestWithContext(c.ctx, c.method, c.reqURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -103,7 +108,7 @@ func (c *xhttpPacketUpWriter) write(b []byte) (int, error) {
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	_, _ = io.CopyBuffer(io.Discard, resp.Body, c.discardBuf)
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("xhttp packet-up bad status: %s", resp.Status)
 	}
@@ -412,14 +417,23 @@ func (c *xhttpClient) dialPacketUp(ctx context.Context) (net.Conn, error) {
 	dlCfg := c.downloadConfig()
 	sessionID := c.generateSessionID()
 	writerCtx, writerCancel := context.WithCancel(c.ctx)
+	scMax := c.scMaxEachPostBytes.Rand()
 	writer := &xhttpPacketUpWriter{
 		ctx:                  writerCtx,
 		cancel:               writerCancel,
 		cfg:                  c.cfg,
-		scMaxEachPostBytes:   c.scMaxEachPostBytes.Rand(),
+		scMaxEachPostBytes:   scMax,
 		scMinPostsIntervalMs: c.scMinPostsIntervalMs,
 		sessionID:            sessionID,
 		transport:            uploadTransport,
+		reqURL: (&url.URL{
+			Scheme: "https",
+			Host:   c.cfg.Host,
+			Path:   c.cfg.NormalizedPath(),
+		}).String(),
+		method:     c.cfg.GetNormalizedUplinkHTTPMethod(),
+		buf:        make([]byte, 0, scMax),
+		discardBuf: make([]byte, 8*1024),
 	}
 	writer.writeCond = sync.Cond{L: &writer.writeMu}
 	conn := &xhttpConn{writer: writer}
