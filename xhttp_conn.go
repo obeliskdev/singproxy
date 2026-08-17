@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -58,10 +59,11 @@ func (c *xhttpConn) setDeadline(t time.Time) error {
 var _ net.Conn = (*xhttpConn)(nil)
 
 type xhttpWaitReadCloser struct {
-	wait chan struct{}
-	once sync.Once
-	rc   io.ReadCloser
-	err  error
+	wait  chan struct{}
+	once  sync.Once
+	rc    io.ReadCloser
+	err   error
+	ready atomic.Uint32
 }
 
 func newXhttpWaitReadCloser() *xhttpWaitReadCloser {
@@ -81,6 +83,7 @@ func (w *xhttpWaitReadCloser) setup(rc io.ReadCloser, err error) {
 		w.rc = rc
 		w.err = err
 		close(w.wait)
+		w.ready.Store(1)
 	})
 	if w.err != nil && rc != nil {
 		_ = rc.Close()
@@ -88,7 +91,9 @@ func (w *xhttpWaitReadCloser) setup(rc io.ReadCloser, err error) {
 }
 
 func (w *xhttpWaitReadCloser) Read(b []byte) (int, error) {
-	<-w.wait
+	if w.ready.Load() == 0 {
+		<-w.wait
+	}
 	if w.rc == nil {
 		return 0, w.err
 	}
@@ -96,13 +101,17 @@ func (w *xhttpWaitReadCloser) Read(b []byte) (int, error) {
 }
 
 func (w *xhttpWaitReadCloser) Err() error {
-	<-w.wait
+	if w.ready.Load() == 0 {
+		<-w.wait
+	}
 	return w.err
 }
 
 func (w *xhttpWaitReadCloser) Close() error {
 	w.setup(nil, net.ErrClosed)
-	<-w.wait
+	if w.ready.Load() == 0 {
+		<-w.wait
+	}
 	if w.rc != nil {
 		return w.rc.Close()
 	}
