@@ -187,6 +187,7 @@ func TestFromURL(t *testing.T) {
 				return
 			}
 			if err != nil {
+				skipIfFeatureMissing(t, err)
 				t.Fatalf("Did not expect an error, but got: %v", err)
 			}
 			if proxy == nil {

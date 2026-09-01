@@ -930,6 +930,7 @@ func TestXHTTPTLSConfigForceH2C(t *testing.T) {
 	params.fingerprint = "firefox"
 	cfg, err = newXHTTPTLSConfig(ctx, params)
 	if err != nil {
+		skipIfFeatureMissing(t, err)
 		t.Fatalf("tls config (fp): %v", err)
 	}
 	if !cfg.forceH2C {
@@ -1143,6 +1144,7 @@ func TestXHTTPNewXHTTPProxyVMessWithTLS(t *testing.T) {
 	}
 	p, err := newXHTTPProxy(raw, u, "vmess", Config{})
 	if err != nil {
+		skipIfFeatureMissing(t, err)
 		t.Fatalf("newXHTTPProxy: %v", err)
 	}
 	if p.security != "auto" {

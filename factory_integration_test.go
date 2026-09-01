@@ -222,6 +222,7 @@ func TestFromURL_WireGuard_AddrResolved(t *testing.T) {
 	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@1.1.1.1:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
 	p, err := FromURL(Config{DialTimeout: 8 * time.Second}, u)
 	if err != nil {
+		skipIfFeatureMissing(t, err)
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The proxy address of a WireGuard tunnel is the address the client
@@ -240,6 +241,7 @@ func TestWireGuardDomainPeerDoesNotPanic(t *testing.T) {
 	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@example.com:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
 	p, err := FromURL(Config{DialTimeout: 5 * time.Second}, u)
 	if err != nil {
+		skipIfFeatureMissing(t, err)
 		t.Fatalf("FromURL failed: %v", err)
 	}
 	conn, err := p.DialContext(context.Background(), "tcp", "1.1.1.1:443")
@@ -261,6 +263,7 @@ func TestWireGuardDomainTargetDoesNotPanic(t *testing.T) {
 	u := "wireguard://" + url.PathEscape(wgPrivateKey) + "@1.1.1.1:51820?publickey=" + url.PathEscape(wgPublicKey) + "&address=10.0.0.1/32"
 	p, err := FromURL(Config{DialTimeout: 5 * time.Second}, u)
 	if err != nil {
+		skipIfFeatureMissing(t, err)
 		t.Fatalf("FromURL failed: %v", err)
 	}
 	conn, err := p.DialContext(context.Background(), "tcp", "example.com:443")

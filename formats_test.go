@@ -34,6 +34,7 @@ func TestSupportedFormatsRoundTrip(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p, err := FromURL(Config{}, c.url)
 			if err != nil {
+				skipIfFeatureMissing(t, err)
 				t.Fatalf("parse failed: %v", err)
 			}
 			defer p.Close()
