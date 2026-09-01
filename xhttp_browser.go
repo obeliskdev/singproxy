@@ -101,7 +101,8 @@ func xhttpGetGreasedChUa(majorVersion int, forkName string) string {
 }
 
 type xhttpMasqueradeCache struct {
-	day           int64
+	day int64
+
 	chromeUA      string
 	chromeSecCHUA string
 	edgeUA        string
@@ -109,6 +110,17 @@ type xhttpMasqueradeCache struct {
 	firefoxUA     string
 	safariUA      string
 	curlUA        string
+
+	// Pre-built single-element value slices shared by the hot header
+	// path; writing header[k] = cache.slice avoids allocating a new
+	// slice for every request.
+	chromeUASlice      []string
+	chromeSecCHUASlice []string
+	edgeUASlice        []string
+	edgeSecCHUASlice   []string
+	firefoxUASlice     []string
+	safariUASlice      []string
+	curlUASlice        []string
 }
 
 func buildMasqueradeCache(day int64) xhttpMasqueradeCache {
@@ -122,6 +134,14 @@ func buildMasqueradeCache(day int64) xhttpMasqueradeCache {
 	cache.firefoxUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:" + strconv.Itoa(firefoxVersion) + ".0) Gecko/20100101 Firefox/" + strconv.Itoa(firefoxVersion) + ".0"
 	cache.safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/" + xhttpSafariVersion() + " Safari/605.1.15"
 	cache.curlUA = "curl/" + xhttpCurlVersion()
+
+	cache.chromeUASlice = []string{cache.chromeUA}
+	cache.chromeSecCHUASlice = []string{cache.chromeSecCHUA}
+	cache.edgeUASlice = []string{cache.edgeUA}
+	cache.edgeSecCHUASlice = []string{cache.edgeSecCHUA}
+	cache.firefoxUASlice = []string{cache.firefoxUA}
+	cache.safariUASlice = []string{cache.safariUA}
+	cache.curlUASlice = []string{cache.curlUA}
 	return cache
 }
 
@@ -135,6 +155,36 @@ func (c *xhttpConfig) masquerade() *xhttpMasqueradeCache {
 	return &c.masq
 }
 
+// Pre-allocated header value slices for constant browser-independent
+// headers, shared across requests (read-only by convention).
+var (
+	xhttpHeaderValueMobile         = []string{"?0"}
+	xhttpHeaderValuePlatform       = []string{`"Windows"`}
+	xhttpHeaderValueDNT            = []string{"1"}
+	xhttpHeaderValueAcceptNav      = []string{"text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"}
+	xhttpHeaderValueAcceptNavFF    = []string{"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+	xhttpHeaderValueLangChrome     = []string{"en-US,en;q=0.9"}
+	xhttpHeaderValueLangFirefox    = []string{"en-US,en;q=0.5"}
+	xhttpHeaderValueUpgradeReqs    = []string{"1"}
+	xhttpHeaderValueFetchSiteNav   = []string{"none"}
+	xhttpHeaderValueFetchModeNav   = []string{"navigate"}
+	xhttpHeaderValueFetchUser      = []string{"?1"}
+	xhttpHeaderValueFetchDestDoc   = []string{"document"}
+	xhttpHeaderValuePriorityNav    = []string{"u=0, i"}
+	xhttpHeaderValueFetchModeWS    = []string{"websocket"}
+	xhttpHeaderValueFetchDestWS    = []string{"websocket"}
+	xhttpHeaderValueFetchDestEmpty = []string{"empty"}
+	xhttpHeaderValueFetchSiteSame  = []string{"same-origin"}
+	xhttpHeaderValueCacheNoCache   = []string{"no-cache"}
+	xhttpHeaderValuePragma         = []string{"no-cache"}
+	xhttpHeaderValueAcceptAny      = []string{"*/*"}
+	xhttpHeaderValueCacheMaxAge    = []string{"max-age=0"}
+	xhttpHeaderValueFetchModeCors  = []string{"cors"}
+	xhttpHeaderValuePriorityU1     = []string{"u=1, i"}
+	xhttpHeaderValuePriorityU4     = []string{"u=4"}
+	xhttpHeaderValuePriorityU3     = []string{"u=3, i"}
+)
+
 func (c *xhttpConfig) applyMasqueradedHeaders(header http.Header, variant string) {
 	browser := "chrome"
 	if ua := header.Get("User-Agent"); ua != "" {
@@ -146,99 +196,97 @@ func (c *xhttpConfig) applyMasqueradedHeaders(header http.Header, variant string
 	cache := c.masquerade()
 	switch browser {
 	case "chrome":
-		header["Sec-CH-UA"] = []string{cache.chromeSecCHUA}
-		header["Sec-CH-UA-Mobile"] = []string{"?0"}
-		header["Sec-CH-UA-Platform"] = []string{"\"Windows\""}
-		header["DNT"] = []string{"1"}
-		header.Set("User-Agent", cache.chromeUA)
-		header.Set("Accept-Language", "en-US,en;q=0.9")
+		header["Sec-CH-UA"] = cache.chromeSecCHUASlice
+		header["Sec-CH-UA-Mobile"] = xhttpHeaderValueMobile
+		header["Sec-CH-UA-Platform"] = xhttpHeaderValuePlatform
+		header["DNT"] = xhttpHeaderValueDNT
+		header["User-Agent"] = cache.chromeUASlice
+		header["Accept-Language"] = xhttpHeaderValueLangChrome
 	case "edge":
-		header["Sec-CH-UA"] = []string{cache.edgeSecCHUA}
-		header["Sec-CH-UA-Mobile"] = []string{"?0"}
-		header["Sec-CH-UA-Platform"] = []string{"\"Windows\""}
-		header["DNT"] = []string{"1"}
-		header.Set("User-Agent", cache.edgeUA)
-		header.Set("Accept-Language", "en-US,en;q=0.9")
+		header["Sec-CH-UA"] = cache.edgeSecCHUASlice
+		header["Sec-CH-UA-Mobile"] = xhttpHeaderValueMobile
+		header["Sec-CH-UA-Platform"] = xhttpHeaderValuePlatform
+		header["DNT"] = xhttpHeaderValueDNT
+		header["User-Agent"] = cache.edgeUASlice
+		header["Accept-Language"] = xhttpHeaderValueLangChrome
 	case "firefox":
-		header.Set("User-Agent", cache.firefoxUA)
-		header["DNT"] = []string{"1"}
-		header.Set("Accept-Language", "en-US,en;q=0.5")
+		header["User-Agent"] = cache.firefoxUASlice
+		header["DNT"] = xhttpHeaderValueDNT
+		header["Accept-Language"] = xhttpHeaderValueLangFirefox
 	case "safari":
-		header.Set("User-Agent", cache.safariUA)
-		header.Set("Accept-Language", "en-US,en;q=0.9")
+		header["User-Agent"] = cache.safariUASlice
+		header["Accept-Language"] = xhttpHeaderValueLangChrome
 	case "golang":
 		delete(header, "User-Agent")
 		return
 	case "curl":
-		header.Set("User-Agent", cache.curlUA)
+		header["User-Agent"] = cache.curlUASlice
 		return
 	}
 	switch variant {
 	case "nav":
-		if header.Get("Cache-Control") == "" {
+		if header["Cache-Control"] == nil {
 			switch browser {
 			case "chrome", "edge":
-				header.Set("Cache-Control", "max-age=0")
+				header["Cache-Control"] = xhttpHeaderValueCacheMaxAge
 			}
 		}
-		header.Set("Upgrade-Insecure-Requests", "1")
-		if header.Get("Accept") == "" {
+		header["Upgrade-Insecure-Requests"] = xhttpHeaderValueUpgradeReqs
+		if header["Accept"] == nil {
 			switch browser {
 			case "chrome", "edge":
-				header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+				header["Accept"] = xhttpHeaderValueAcceptNav
 			case "firefox", "safari":
-				header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+				header["Accept"] = xhttpHeaderValueAcceptNavFF
 			}
 		}
-		header.Set("Sec-Fetch-Site", "none")
-		header.Set("Sec-Fetch-Mode", "navigate")
-		switch browser {
-		case "safari":
-		default:
-			header.Set("Sec-Fetch-User", "?1")
+		header["Sec-Fetch-Site"] = xhttpHeaderValueFetchSiteNav
+		header["Sec-Fetch-Mode"] = xhttpHeaderValueFetchModeNav
+		if browser != "safari" {
+			header["Sec-Fetch-User"] = xhttpHeaderValueFetchUser
 		}
-		header.Set("Sec-Fetch-Dest", "document")
-		header.Set("Priority", "u=0, i")
+		header["Sec-Fetch-Dest"] = xhttpHeaderValueFetchDestDoc
+		header["Priority"] = xhttpHeaderValuePriorityNav
 	case "ws":
-		header.Set("Sec-Fetch-Mode", "websocket")
+		header["Sec-Fetch-Mode"] = xhttpHeaderValueFetchModeWS
 		switch browser {
 		case "safari":
-			header.Set("Sec-Fetch-Dest", "websocket")
+			header["Sec-Fetch-Dest"] = xhttpHeaderValueFetchDestWS
 		default:
-			header.Set("Sec-Fetch-Dest", "empty")
+			header["Sec-Fetch-Dest"] = xhttpHeaderValueFetchDestEmpty
 		}
-		header.Set("Sec-Fetch-Site", "same-origin")
-		if header.Get("Cache-Control") == "" {
-			header.Set("Cache-Control", "no-cache")
+		header["Sec-Fetch-Site"] = xhttpHeaderValueFetchSiteSame
+		if header["Cache-Control"] == nil {
+			header["Cache-Control"] = xhttpHeaderValueCacheNoCache
 		}
-		if header.Get("Pragma") == "" {
-			header.Set("Pragma", "no-cache")
+		if header["Pragma"] == nil {
+			header["Pragma"] = xhttpHeaderValuePragma
 		}
-		if header.Get("Accept") == "" {
-			header.Set("Accept", "*/*")
+		if header["Accept"] == nil {
+			header["Accept"] = xhttpHeaderValueAcceptAny
 		}
 	case "fetch":
-		header.Set("Sec-Fetch-Mode", "cors")
-		header.Set("Sec-Fetch-Dest", "empty")
-		header.Set("Sec-Fetch-Site", "same-origin")
-		if header.Get("Priority") == "" {
+		header["Sec-Fetch-Mode"] = xhttpHeaderValueFetchModeCors
+		header["Sec-Fetch-Dest"] = xhttpHeaderValueFetchDestEmpty
+		header["Sec-Fetch-Site"] = xhttpHeaderValueFetchSiteSame
+		if header["Priority"] == nil {
 			switch browser {
 			case "chrome", "edge":
-				header.Set("Priority", "u=1, i")
+				header["Priority"] = xhttpHeaderValuePriorityU1
 			case "firefox":
-				header.Set("Priority", "u=4")
+				header["Priority"] = xhttpHeaderValuePriorityU4
 			case "safari":
-				header.Set("Priority", "u=3, i")
+				header["Priority"] = xhttpHeaderValuePriorityU3
 			}
 		}
-		if header.Get("Cache-Control") == "" {
-			header.Set("Cache-Control", "no-cache")
+		if header["Cache-Control"] == nil {
+			header["Cache-Control"] = xhttpHeaderValueCacheNoCache
 		}
-		if header.Get("Pragma") == "" {
-			header.Set("Pragma", "no-cache")
+		if header["Pragma"] == nil {
+			header["Pragma"] = xhttpHeaderValuePragma
 		}
-		if header.Get("Accept") == "" {
-			header.Set("Accept", "*/*")
+		if header["Accept"] == nil {
+			header["Accept"] = xhttpHeaderValueAcceptAny
 		}
 	}
 }

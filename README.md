@@ -36,7 +36,24 @@ type Proxy interface {
 	Addr() net.IP
 	DialContext(ctx context.Context, network string, addr string) (net.Conn, error)
 	DialContextAddr(ctx context.Context, network string, addr *net.TCPAddr) (net.Conn, error)
+
+	// Close releases all transport resources held by the proxy.
+	// Call it when you no longer need the proxy; it is safe to call
+	// multiple times.
+	Close() error
 }
+```
+
+Every proxy returned by `FromURL` owns transport resources (sockets,
+QUIC endpoints, WireGuard devices). Call `Close` when you are done with
+it to avoid leaking goroutines and file descriptors:
+
+```go
+proxy, err := singproxy.FromURL(singproxy.Config{}, "vless://uuid@example.com:443")
+if err != nil {
+	panic(err)
+}
+defer proxy.Close()
 ```
 
 ## Configuration
@@ -105,6 +122,11 @@ for _, e := range errs {
 }
 ```
 
+`FromURLs` parses concurrently but preserves the input order in both
+the returned proxies and the error list, and each error is wrapped with
+the original index (`url #N (...)`) so failures trace back to their
+line in the input list.
+
 ## Supported Schemes
 
 - `direct`
@@ -118,6 +140,7 @@ for _, e := range errs {
 - `ssh://`
 - `socks://`, `socks5://`, `socks4://`, `socks4a://`
 - `http://`, `https://`, `http2://`
+- `naive://`, `naive+https://` (requires the `with_naive_outbound` build tag)
 - `wireguard://`
 - `shadowtls://`
 - `anytls://`, `atls://`
@@ -134,7 +157,16 @@ for _, e := range errs {
 > stream-up, packet-up) with header padding, XMUX, gRPC header camouflage,
 > H2/HTTP1.1/H3 (QUIC) transport, REALITY TLS, and downloadSettings
 > (upstream/downstream separation). XHTTP works with VLESS, VMess, and Trojan
-> protocols. Browser dialer is not supported (it requires a real browser).
+> protocols — including vmess links whose base64 JSON payload sets
+> `net` to `xhttp` or `splithttp`. Browser dialer is not supported (it
+> requires a real browser).
+
+> **Note:** For `tor://` links, a socks host is required (`tor://127.0.0.1:9050`).
+> A hostless `tor://` link is rejected at parse time instead of failing
+> later with a nil-pointer dial.
+
+> **Note:** For WireGuard, `Addr()` returns the local tunnel address (the
+> first prefix in `address=`), not the public peer endpoint.
 
 ## HTTP Client Integration Example
 

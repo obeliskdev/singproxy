@@ -169,7 +169,7 @@ func (c *xhttpConfig) applyXPaddingToRequest(reqHeaders http.Header, reqURL *url
 	case xhttpPlacementQueryInHeader:
 		u := *reqURL
 		u.RawQuery = p.Key + "=" + xhttpGeneratePadding(config.Method, config.Length)
-		reqHeaders.Set(p.Header, u.String())
+		reqHeaders[p.Header] = []string{u.String()}
 	case xhttpPlacementQuery:
 		q := reqURL.Query()
 		q.Set(p.Key, xhttpGeneratePadding(config.Method, config.Length))
@@ -188,7 +188,7 @@ func (c *xhttpConfig) fillStreamRequestHeaders(reqHeaders http.Header, reqURL *u
 	c.applyMetaToRequest(reqHeaders, reqURL, sessionID, "")
 
 	if hasBody && !c.NoGRPCHeader {
-		reqHeaders.Set("Content-Type", "application/grpc")
+		reqHeaders["Content-Type"] = xhttpHeaderValueContentTypeGRPC
 	}
 
 	return nil
@@ -265,3 +265,7 @@ func (c *xhttpConfig) applyMetaToRequest(reqHeaders http.Header, reqURL *url.URL
 		}
 	}
 }
+
+// xhttpHeaderValueContentTypeGRPC is pre-allocated so the hot request
+// header path avoids a slice allocation per request.
+var xhttpHeaderValueContentTypeGRPC = []string{"application/grpc"}

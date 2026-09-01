@@ -78,9 +78,6 @@ func parseShadowsocks(out *option.ShadowsocksOutboundOptions, u *url.URL) error 
 			parts := strings.SplitN(decodedStr, ":", 2)
 			if len(parts) == 2 {
 				method, password = parts[0], parts[1]
-				if strings.Count(password, ":") == 1 {
-					password = strings.Split(password, ":")[0]
-				}
 			} else {
 				method, password = extractUserPass(u.User)
 			}
