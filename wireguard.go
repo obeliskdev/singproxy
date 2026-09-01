@@ -45,8 +45,23 @@ func newWireGuardProxy(p *SingBoxProxy, u *url.URL) (*SingBoxProxy, error) {
 		}
 		return nil
 	}
-	p.proxyIP = resolveHostIP(options.Peers[0].Address)
+	p.proxyIP = wireGuardLocalIP(options.Address)
 	return p, nil
+}
+
+// wireGuardLocalIP extracts the first local tunnel address from the
+// configured address prefixes. The proxy address of a WireGuard tunnel
+// is the address the client itself holds inside the tunnel, not the
+// public peer endpoint.
+func wireGuardLocalIP(prefixes []netip.Prefix) net.IP {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	addr := prefixes[0].Addr()
+	if addr.Is4() {
+		return net.IP(addr.AsSlice())
+	}
+	return addr.AsSlice()
 }
 
 func parseWireGuard(out *option.WireGuardEndpointOptions, u *url.URL) error {

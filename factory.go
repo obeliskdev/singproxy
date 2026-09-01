@@ -35,8 +35,15 @@ type SingBoxProxy struct {
 	cfg       Config
 	startMu   sync.Mutex
 	started   bool
+	closed    bool
 	startFunc func() error
 }
+
+// maxParseConcurrency bounds the number of concurrent FromURL parses.
+// Parsing is mostly CPU-bound (URL cleaning, JSON decoding, outbound
+// construction), so an unbounded goroutine per URL only adds scheduler
+// pressure for large lists.
+const maxParseConcurrency = 16
 
 var globalBox *singBoxContext
 
@@ -140,7 +147,11 @@ func FromURL(cfg Config, proxyURL string) (Proxy, error) {
 		return nil, err
 	}
 
-	if isXHTTPTransport(u) {
+	if proxyType == "tor" && u.Host == "" {
+		return nil, fmt.Errorf("%w: tor proxy needs socks host", ErrInvalidProxyFormat)
+	}
+
+	if isXHTTPTransport(u) || isVMessXHTTP(u) {
 		return newXHTTPProxy(proxyURL, u, proxyType, cfg)
 	}
 
@@ -183,44 +194,53 @@ func newSingBoxProxy(
 	return p, nil
 }
 
+type proxyResult struct {
+	proxy Proxy
+	err   error
+}
+
+// FromURLs parses all URLs concurrently while preserving input order in
+// both the returned proxies and errors. Errors are wrapped with the
+// original URL index so that a failure can be traced back to its line
+// in the input list.
 func FromURLs(cfg Config, urls ...string) ([]Proxy, []error) {
-	var (
-		proxies = make([]Proxy, 0, len(urls))
-		errs    = make([]error, 0)
-		wg      sync.WaitGroup
-	)
-
-	results := make(chan struct {
-		proxy Proxy
-		err   error
-	}, len(urls))
-
-	for i, u := range urls {
-		wg.Add(1)
-		go func(index int, urlStr string) {
-			defer wg.Done()
-			proxy, err := FromURL(cfg, urlStr)
-			if err != nil {
-				err = fmt.Errorf("url #%d (%s): %w", index, urlStr, err)
-			}
-			results <- struct {
-				proxy Proxy
-				err   error
-			}{proxy, err}
-		}(i, u)
+	results := make([]proxyResult, len(urls))
+	workers := len(urls)
+	if workers > maxParseConcurrency {
+		workers = maxParseConcurrency
 	}
 
-	wg.Wait()
-	close(results)
+	jobs := make(chan int, len(urls))
+	for i := range urls {
+		jobs <- i
+	}
+	close(jobs)
 
-	for res := range results {
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				proxy, err := FromURL(cfg, urls[index])
+				if err != nil {
+					err = fmt.Errorf("url #%d (%s): %w", index, urls[index], err)
+				}
+				results[index] = proxyResult{proxy: proxy, err: err}
+			}
+		}()
+	}
+	wg.Wait()
+
+	proxies := make([]Proxy, 0, len(urls))
+	errs := make([]error, 0)
+	for _, res := range results {
 		if res.err != nil {
 			errs = append(errs, res.err)
 		} else if res.proxy != nil {
 			proxies = append(proxies, res.proxy)
 		}
 	}
-
 	return proxies, errs
 }
 
@@ -261,7 +281,7 @@ func (p *SingBoxProxy) dialSocksaddr(ctx context.Context, network string, target
 	conn, err := p.outbound.DialContext(ctx, network, targetAddr)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, ErrProxyDialTimeoutReached
+			return nil, ErrProxyDialTimeoutReached()
 		}
 		return nil, err
 	}
@@ -277,10 +297,35 @@ func (p *SingBoxProxy) ensureStarted() error {
 	if p.started {
 		return nil
 	}
+	if p.closed {
+		return ErrProxyClosed
+	}
 	if err := p.startFunc(); err != nil {
 		return err
 	}
 	p.started = true
+	return nil
+}
+
+// Close shuts down the underlying outbound and releases its resources.
+// It is safe to call multiple times and on a never-started proxy.
+func (p *SingBoxProxy) Close() error {
+	p.startMu.Lock()
+	defer p.startMu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	if p.outbound == nil {
+		return nil
+	}
+	closer, ok := p.outbound.(interface{ Close() error })
+	if !ok {
+		return nil
+	}
+	if err := closer.Close(); err != nil {
+		return fmt.Errorf("close %s outbound: %w", p.typed, err)
+	}
 	return nil
 }
 

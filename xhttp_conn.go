@@ -17,7 +17,8 @@ type xhttpConn struct {
 	remoteAddr net.Addr
 	localAddr  net.Addr
 
-	deadline *time.Timer
+	readDeadline  *time.Timer
+	writeDeadline *time.Timer
 }
 
 func (c *xhttpConn) Write(b []byte) (int, error) { return c.writer.Write(b) }
@@ -35,24 +36,35 @@ func (c *xhttpConn) Close() error {
 func (c *xhttpConn) LocalAddr() net.Addr  { return c.localAddr }
 func (c *xhttpConn) RemoteAddr() net.Addr { return c.remoteAddr }
 
-func (c *xhttpConn) SetDeadline(t time.Time) error      { return c.setDeadline(t) }
-func (c *xhttpConn) SetReadDeadline(t time.Time) error  { return c.setDeadline(t) }
-func (c *xhttpConn) SetWriteDeadline(t time.Time) error { return c.setDeadline(t) }
+func (c *xhttpConn) SetDeadline(t time.Time) error {
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.SetWriteDeadline(t)
+}
 
-func (c *xhttpConn) setDeadline(t time.Time) error {
+func (c *xhttpConn) SetReadDeadline(t time.Time) error {
+	return c.setDeadline(&c.readDeadline, t)
+}
+
+func (c *xhttpConn) SetWriteDeadline(t time.Time) error {
+	return c.setDeadline(&c.writeDeadline, t)
+}
+
+func (c *xhttpConn) setDeadline(timer **time.Timer, t time.Time) error {
 	if t.IsZero() {
-		if c.deadline != nil {
-			c.deadline.Stop()
-			c.deadline = nil
+		if *timer != nil {
+			(*timer).Stop()
+			*timer = nil
 		}
 		return nil
 	}
 	d := time.Until(t)
-	if c.deadline != nil {
-		c.deadline.Reset(d)
+	if *timer != nil {
+		(*timer).Reset(d)
 		return nil
 	}
-	c.deadline = time.AfterFunc(d, func() { _ = c.Close() })
+	*timer = time.AfterFunc(d, func() { _ = c.Close() })
 	return nil
 }
 

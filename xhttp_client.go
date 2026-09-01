@@ -257,27 +257,30 @@ func (c *xhttpClient) sendDownloadRequest(ctx context.Context, transport http.Ro
 	return transport.RoundTrip(req)
 }
 
-func (c *xhttpClient) awaitDownload(ctx context.Context, transport http.RoundTripper, dlCfg *xhttpConfig, sessionID, modeLabel string) (*xhttpWaitReadCloser, chan bool) {
+func (c *xhttpClient) awaitDownload(ctx context.Context, transport http.RoundTripper, dlCfg *xhttpConfig, sessionID, modeLabel string) (*xhttpWaitReadCloser, chan error) {
 	wrc := newXhttpWaitReadCloser()
-	gotConn := make(chan bool, 1)
+	done := make(chan error, 1)
 
 	go func() {
 		resp, err := c.sendDownloadRequest(ctx, transport, dlCfg, sessionID)
 		if err != nil {
+			err = fmt.Errorf("xhttp %s download: %w", modeLabel, err)
 			wrc.CloseWithError(err)
-			close(gotConn)
+			done <- err
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
 			_ = resp.Body.Close()
-			wrc.CloseWithError(fmt.Errorf("xhttp %s download bad status: %s", modeLabel, resp.Status))
+			err = fmt.Errorf("xhttp %s download bad status: %s", modeLabel, resp.Status)
+			wrc.CloseWithError(err)
+			done <- err
 			return
 		}
 		wrc.Set(resp.Body)
-		gotConn <- true
+		done <- nil
 	}()
 
-	return wrc, gotConn
+	return wrc, done
 }
 
 func (c *xhttpClient) dialStreamOne(ctx context.Context) (net.Conn, error) {
@@ -292,46 +295,52 @@ func (c *xhttpClient) dialStreamOne(ctx context.Context) (net.Conn, error) {
 	}
 	pr, pw := io.Pipe()
 	conn := &xhttpConn{writer: pw}
-	gotConn := make(chan bool, 1)
+	done := make(chan error, 1)
 	reqCtx, reqCancel := context.WithCancel(c.ctx)
-	stop := context.AfterFunc(ctx, reqCancel)
+	// A POST whose body is a pipe blocks the transport write loop in
+	// pipe.Read, and cancelling the request context does not unblock
+	// it. Close the pipe with an error so RoundTrip can return when
+	// the dial context expires or is cancelled.
+	stop := context.AfterFunc(ctx, func() {
+		reqCancel()
+		_ = pw.CloseWithError(context.Canceled)
+	})
 	defer stop()
 
 	go func() {
 		req, err := http.NewRequestWithContext(reqCtx, c.cfg.GetNormalizedUplinkHTTPMethod(), requestURL.String(), pr)
-		if err != nil {
-			cleanupStreamOne(pr, pw, transport, reqCancel)
-			return
+		if err == nil {
+			req.Host = c.cfg.Host
+			err = c.cfg.fillStreamRequestHeaders(req.Header, req.URL, "", true)
 		}
-		req.Host = c.cfg.Host
-		if err = c.cfg.fillStreamRequestHeaders(req.Header, req.URL, "", true); err != nil {
-			cleanupStreamOne(pr, pw, transport, reqCancel)
-			return
+		var resp *http.Response
+		if err == nil {
+			resp, err = transport.RoundTrip(req)
 		}
-		wrc := newXhttpWaitReadCloser()
-		resp, err := transport.RoundTrip(req)
 		if err != nil {
-			wrc.CloseWithError(err)
+			_ = pw.CloseWithError(err)
+			done <- fmt.Errorf("xhttp stream-one: %w", err)
 			return
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			_ = resp.Body.Close()
-			wrc.CloseWithError(fmt.Errorf("xhttp stream-one bad status: %s", resp.Status))
+			err = fmt.Errorf("xhttp stream-one bad status: %s", resp.Status)
+			_ = pw.CloseWithError(err)
+			done <- err
 			return
 		}
-		wrc.Set(resp.Body)
-		conn.reader = wrc
+		conn.reader = resp.Body
 		conn.onClose = func() {
 			_ = pr.Close()
 			xhttpCloseTransport(transport)
 			reqCancel()
 		}
-		gotConn <- true
+		done <- nil
 	}()
 
-	if !<-gotConn {
+	if err := <-done; err != nil {
 		cleanupStreamOne(pr, pw, transport, reqCancel)
-		return nil, fmt.Errorf("xhttp stream-one: failed to connect")
+		return nil, err
 	}
 	return conn, nil
 }
@@ -358,7 +367,12 @@ func (c *xhttpClient) dialStreamUp(ctx context.Context) (net.Conn, error) {
 	conn := &xhttpConn{writer: pw}
 	sessionID := c.generateSessionID()
 	reqCtx, reqCancel := context.WithCancel(c.ctx)
-	stop := context.AfterFunc(ctx, reqCancel)
+	// Closing the pipe unblocks the transport write loop when the dial
+	// context expires; see the matching comment in dialStreamOne.
+	stop := context.AfterFunc(ctx, func() {
+		reqCancel()
+		_ = pw.CloseWithError(context.Canceled)
+	})
 	defer stop()
 
 	uploadReq, err := http.NewRequestWithContext(reqCtx, c.cfg.GetNormalizedUplinkHTTPMethod(), streamURL.String(), pr)
@@ -372,11 +386,11 @@ func (c *xhttpClient) dialStreamUp(ctx context.Context) (net.Conn, error) {
 	}
 	uploadReq.Host = c.cfg.Host
 
-	wrc, gotConn := c.awaitDownload(reqCtx, downloadTransport, dlCfg, sessionID, "stream-up")
+	wrc, dlDone := c.awaitDownload(reqCtx, downloadTransport, dlCfg, sessionID, "stream-up")
 
-	if !<-gotConn {
+	if dlErr := <-dlDone; dlErr != nil {
 		cleanupStreamUp(uploadTransport, downloadTransport, reqCancel)
-		return nil, fmt.Errorf("xhttp stream-up: failed to connect")
+		return nil, dlErr
 	}
 
 	conn.reader = wrc
@@ -441,17 +455,13 @@ func (c *xhttpClient) dialPacketUp(ctx context.Context) (net.Conn, error) {
 	stop := context.AfterFunc(ctx, reqCancel)
 	defer stop()
 
-	wrc, gotConn := c.awaitDownload(reqCtx, downloadTransport, dlCfg, sessionID, "packet-up")
+	wrc, dlDone := c.awaitDownload(reqCtx, downloadTransport, dlCfg, sessionID, "packet-up")
 
-	if !<-gotConn {
-		err := wrc.Err()
+	if dlErr := <-dlDone; dlErr != nil {
 		xhttpCloseTransport(uploadTransport)
 		xhttpCloseTransport(downloadTransport)
 		reqCancel()
-		if err != nil {
-			return nil, fmt.Errorf("xhttp packet-up: failed to connect: %w", err)
-		}
-		return nil, fmt.Errorf("xhttp packet-up: failed to connect")
+		return nil, dlErr
 	}
 
 	conn.reader = wrc

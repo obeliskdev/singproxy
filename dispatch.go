@@ -109,6 +109,10 @@ func parseProxyURL(out any, u *url.URL, typed string, timeout time.Duration) (er
 		options := out.(*option.AnyTLSOutboundOptions)
 		options.DialerOptions = dialerOptions
 		return parseAnyTLS(options, u)
+	case "naive":
+		options := out.(*option.NaiveOutboundOptions)
+		options.DialerOptions = dialerOptions
+		return parseNaive(options, u)
 	case "direct", "tor":
 		return nil
 	default:

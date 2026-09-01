@@ -73,12 +73,22 @@ func TestFromURL_InvalidURL(t *testing.T) {
 }
 
 func TestFromURL_Tor(t *testing.T) {
-	p, err := FromURL(Config{DialTimeout: 8 * time.Second}, "tor://")
+	p, err := FromURL(Config{DialTimeout: 8 * time.Second}, "tor://127.0.0.1:9050")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if p == nil {
 		t.Fatal("expected non-nil proxy for tor")
+	}
+}
+
+// TestFromURL_TorHostlessRejected guards against the former panic: a
+// tor link without a socks host used to parse successfully and then
+// segfault on the first dial.
+func TestFromURL_TorHostlessRejected(t *testing.T) {
+	_, err := FromURL(Config{DialTimeout: 8 * time.Second}, "tor://")
+	if err == nil {
+		t.Fatal("expected error for hostless tor link")
 	}
 }
 
@@ -214,8 +224,10 @@ func TestFromURL_WireGuard_AddrResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := p.Addr(); !got.Equal(net.ParseIP("1.1.1.1")) {
-		t.Errorf("Addr(): got %v, want 1.1.1.1", got)
+	// The proxy address of a WireGuard tunnel is the address the client
+	// holds inside the tunnel, not the public peer endpoint.
+	if got := p.Addr(); !got.Equal(net.ParseIP("10.0.0.1")) {
+		t.Errorf("Addr(): got %v, want 10.0.0.1", got)
 	}
 }
 

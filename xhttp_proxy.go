@@ -33,6 +33,34 @@ func isXHTTPTransport(u *url.URL) bool {
 	return t == "xhttp" || t == "splithttp"
 }
 
+// isVMessXHTTP reports whether a vmess:// link carries a base64 JSON
+// payload whose "net" field selects the xhttp or splithttp transport.
+// The Xray ecosystem shares one JSON format between the vmess URL and
+// query-based links, so both spellings must be honoured here.
+func isVMessXHTTP(u *url.URL) bool {
+	if !strings.EqualFold(u.Scheme, "vmess") {
+		return false
+	}
+	payload, err := extractVMessPayload(u)
+	if err != nil {
+		return false
+	}
+	jsonBytes, err := base64Decode(payload)
+	if err != nil {
+		return false
+	}
+	var data vmessLinkData
+	if err := json.Unmarshal(jsonBytes, &data); err != nil {
+		return false
+	}
+	switch strings.ToLower(anyToString(data.Net)) {
+	case "xhttp", "splithttp":
+		return true
+	default:
+		return false
+	}
+}
+
 type xproxyProxy struct {
 	original string
 	proxyIP  net.IP
@@ -235,6 +263,10 @@ func newXHTTPProxyVMess(originalURL string, u *url.URL, cfg Config) (*xproxyProx
 
 func (p *xproxyProxy) String() string { return p.original }
 func (p *xproxyProxy) Addr() net.IP   { return p.proxyIP }
+
+// Close is a no-op: xproxyProxy holds no long-lived transport state.
+// Per-connection transports are torn down when the connection closes.
+func (p *xproxyProxy) Close() error { return nil }
 
 func (p *xproxyProxy) DialContext(ctx context.Context, network string, addr string) (net.Conn, error) {
 	if addr == "" {
