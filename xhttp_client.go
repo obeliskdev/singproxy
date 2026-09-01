@@ -125,6 +125,11 @@ func (c *xhttpPacketUpWriter) Close() error {
 	case <-ch:
 	case <-time.After(time.Second):
 	}
+	c.writeMu.Lock()
+	if c.flushErr == nil {
+		c.flushErr = net.ErrClosed
+	}
+	c.writeMu.Unlock()
 	c.cancel()
 	xhttpCloseTransport(c.transport)
 	return nil
