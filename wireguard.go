@@ -18,8 +18,10 @@ const wireGuardTag = "singproxy-wg"
 func newWireGuardProxy(p *SingBoxProxy, u *url.URL) (*SingBoxProxy, error) {
 	options := &option.WireGuardEndpointOptions{
 		DialerOptions: option.DialerOptions{
-			ReuseAddr:      true,
-			ConnectTimeout: badoption.Duration(p.cfg.DialTimeout),
+			AbstractDialerOptions: option.AbstractDialerOptions{
+				ReuseAddr:      true,
+				ConnectTimeout: badoption.Duration(p.cfg.DialTimeout),
+			},
 		},
 	}
 	if err := parseWireGuard(options, u); err != nil {

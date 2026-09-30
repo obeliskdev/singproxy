@@ -53,8 +53,10 @@ func getProxyType(scheme string) (string, error) {
 
 func parseProxyURL(out any, u *url.URL, typed string, timeout time.Duration) (err error) {
 	dialerOptions := option.DialerOptions{
-		ReuseAddr:      true,
-		ConnectTimeout: badoption.Duration(timeout),
+		AbstractDialerOptions: option.AbstractDialerOptions{
+			ReuseAddr:      true,
+			ConnectTimeout: badoption.Duration(timeout),
+		},
 	}
 	switch typed {
 	case "vmess":

@@ -881,7 +881,7 @@ func TestXHTTPTransportSelection(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", tr)
 	}
-	if htr.Protocols != nil {
+	if htr.Protocols != nil && htr.Protocols.UnencryptedHTTP2() {
 		t.Errorf("h2 transport should not force unencrypted HTTP/2, got %v", htr.Protocols)
 	}
 

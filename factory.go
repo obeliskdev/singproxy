@@ -62,6 +62,7 @@ func init() {
 		include.EndpointRegistry(),
 		include.DNSTransportRegistry(),
 		include.ServiceRegistry(),
+		include.CertificateProviderRegistry(),
 	)
 
 	nopLogger := logger.NOP()
@@ -87,6 +88,13 @@ func init() {
 	connManager := route.NewConnectionManager(nopLogger)
 	inboundManager := inbound.NewManager(nopLogger, inboundRegistry, endpointManager)
 
+	networkManager, err := route.NewNetworkManager(ctx, nopLogger, option.RouteOptions{}, option.DNSOptions{})
+	if err != nil {
+		panic(fmt.Sprintf("failed to create network manager: %v", err))
+	}
+
+	service.MustRegister[adapter.NetworkManager](ctx, networkManager)
+
 	dnsTransportManager.Initialize(func() (adapter.DNSTransport, error) {
 		return local.NewTransport(ctx, nopLogger, "local", option.LocalDNSServerOptions{})
 	})
@@ -97,14 +105,30 @@ func init() {
 	service.MustRegister[adapter.ConnectionManager](ctx, connManager)
 	service.MustRegister[adapter.InboundManager](ctx, inboundManager)
 
-	if err := dnsTransportManager.Start(adapter.StartStateStart); err != nil {
-		panic(fmt.Sprintf("failed to start DNS transport manager: %v", err))
+	// The DNS router resolves the DNS transport manager out of the context
+	// when it is constructed, so it has to be built after the managers above
+	// are registered.
+	dnsRouter, err := dns.NewRouter(ctx, log.NewNOPFactory(), option.DNSOptions{})
+	if err != nil {
+		panic(fmt.Sprintf("failed to create DNS router: %v", err))
 	}
-
-	dnsRouter := dns.NewRouter(ctx, log.NewNOPFactory(), option.DNSOptions{})
 	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
-	if err := dnsRouter.Start(adapter.StartStateStart); err != nil {
-		panic(fmt.Sprintf("failed to start DNS router: %v", err))
+
+	// sing-box drives its components through a two-phase startup. The
+	// initialize phase wires up shared state: notably the DNS transport
+	// manager materializes its fallback "local" transport and the network
+	// manager starts its interface monitor. Going straight to the start
+	// phase leaves the default DNS transport nil, which panics on the
+	// first lookup once a proxy target is a domain.
+	if err := adapter.Start(ctx, nopLogger, adapter.StartStateInitialize,
+		networkManager, dnsTransportManager, dnsRouter,
+	); err != nil {
+		panic(fmt.Sprintf("failed to initialize sing-box core: %v", err))
+	}
+	if err := adapter.Start(ctx, nopLogger, adapter.StartStateStart,
+		dnsTransportManager, networkManager, dnsRouter,
+	); err != nil {
+		panic(fmt.Sprintf("failed to start sing-box core: %v", err))
 	}
 
 	globalBox = &singBoxContext{
