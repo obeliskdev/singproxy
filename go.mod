@@ -1,6 +1,6 @@
 module github.com/obeliskdev/singproxy
 
-go 1.26.6
+go 1.27.1
 
 require (
 	github.com/sagernet/quic-go v0.61.0-sing-box-mod.9
